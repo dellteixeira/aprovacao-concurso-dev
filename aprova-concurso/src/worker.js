@@ -2,108 +2,76 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    if (url.pathname === "/api/ping") {
-      return json({
-        ok: true,
-        rota: "/api/ping",
-        mensagem: "Worker DEV respondendo corretamente.",
-        path: url.pathname
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders(),
       });
     }
 
-    if (url.pathname === "/api/ai/teste") {
-      return handleAiTeste(env);
+    if (url.pathname === "/api/health") {
+      return json({
+        ok: true,
+        service: "Aprova Concurso DEV",
+        ai: Boolean(env.AI),
+        supabase: Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY),
+      });
     }
 
     if (url.pathname === "/api/ai/analisar-edital" && request.method === "POST") {
-      return handleAnalisarEdital(request, env);
+      return analisarEdital(request, env);
+    }
+
+    if (url.pathname === "/api/ai/salvar-edital" && request.method === "POST") {
+      return salvarEdital(request, env);
     }
 
     if (url.pathname.startsWith("/api/")) {
       return json({
         ok: false,
         erro: "API existe, mas rota não encontrada",
-        path: url.pathname
+        path: url.pathname,
       }, 404);
     }
 
     return env.ASSETS.fetch(request);
-  }
+  },
 };
 
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data, null, 2), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store"
-    }
-  });
-}
-
-async function handleAiTeste(env) {
+async function analisarEdital(request, env) {
   try {
     if (!env.AI) {
       return json({
         ok: false,
-        erro: "Binding env.AI não encontrado."
+        erro: "Binding Workers AI não encontrado. Verifique se existe um binding chamado AI na Cloudflare.",
       }, 500);
     }
 
-    const resposta = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-      messages: [
-        {
-          role: "system",
-          content: "Você é um assistente objetivo especializado em estudos para concursos públicos."
-        },
-        {
-          role: "user",
-          content: "Responda em uma frase: a integração da IA do Aprova Concurso DEV está funcionando?"
-        }
-      ]
-    });
+    const formData = await request.formData();
+    const arquivo = formData.get("arquivo");
 
-    return json({
-      ok: true,
-      rota: "/api/ai/teste",
-      resposta
-    });
-
-  } catch (error) {
-    return json({
-      ok: false,
-      rota: "/api/ai/teste",
-      erro: error.message || "Erro ao chamar Workers AI."
-    }, 500);
-  }
-}
-
-async function handleAnalisarEdital(request, env) {
-  try {
-    const body = await request.json().catch(() => null);
-
-    if (!body || typeof body.texto !== "string") {
+    if (!arquivo) {
       return json({
         ok: false,
-        erro: "Envie um JSON com o campo texto."
+        erro: "Nenhum arquivo enviado. O campo esperado é 'arquivo'.",
       }, 400);
     }
 
-    const texto = body.texto.trim();
+    const textoEdital = await arquivo.text();
 
-    if (texto.length < 50) {
+    if (!textoEdital || textoEdital.trim().length < 20) {
       return json({
         ok: false,
-        erro: "O texto enviado é muito curto para análise."
+        erro: "O arquivo enviado está vazio ou possui texto insuficiente.",
       }, 400);
     }
-
-    const textoLimitado = texto.slice(0, 12000);
 
     const prompt = `
-Analise o texto de edital abaixo para um aplicativo de estudos para concursos públicos.
+Você é um especialista em concursos públicos.
 
-Retorne SOMENTE JSON válido, sem markdown, neste formato:
+Analise o edital abaixo e retorne SOMENTE JSON válido, sem markdown, sem comentários e sem qualquer texto fora do JSON.
+
+Formato obrigatório:
 
 {
   "concurso": {
@@ -111,13 +79,14 @@ Retorne SOMENTE JSON válido, sem markdown, neste formato:
     "orgao": "",
     "cargo": "",
     "banca": "",
-    "data_prova": ""
+    "data_prova": "AAAA-MM-DD",
+    "estrategia": ""
   },
   "disciplinas": [
     {
       "nome": "",
       "prioridade": "alta|media|baixa",
-      "justificativa": "",
+      "peso": 1,
       "topicos": [
         {
           "nome": "",
@@ -125,38 +94,185 @@ Retorne SOMENTE JSON válido, sem markdown, neste formato:
         }
       ]
     }
-  ],
-  "estrategia": ""
+  ]
 }
 
-Texto do edital:
-${textoLimitado}
+Regras obrigatórias:
+- Extraia todas as disciplinas relevantes do edital.
+- Extraia todos os tópicos de cada disciplina.
+- Use prioridade alta para matérias centrais, recorrentes ou com maior peso.
+- Use prioridade média para matérias importantes, mas secundárias.
+- Use prioridade baixa para tópicos acessórios.
+- Se a data da prova não estiver clara, use null.
+- O campo status dos tópicos deve ser sempre "pendente".
+- Não invente dados inexistentes; use null quando necessário.
+- Retorne somente JSON válido.
+
+EDITAL:
+${textoEdital}
 `;
 
     const resposta = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
       messages: [
         {
           role: "system",
-          content: "Você é um estrategista de concursos públicos. Retorne apenas JSON válido."
+          content: "Você é um extrator de dados de edital. Sua resposta deve ser somente JSON válido.",
         },
         {
           role: "user",
-          content: prompt
-        }
-      ]
+          content: prompt,
+        },
+      ],
     });
+
+    const textoResposta =
+      resposta.response ||
+      resposta.result ||
+      resposta.text ||
+      JSON.stringify(resposta);
+
+    const resultado = extrairJson(textoResposta);
 
     return json({
       ok: true,
-      rota: "/api/ai/analisar-edital",
-      resposta
+      resultado,
     });
-
   } catch (error) {
     return json({
       ok: false,
-      rota: "/api/ai/analisar-edital",
-      erro: error.message || "Erro ao analisar edital."
+      erro: error.message,
     }, 500);
   }
+}
+
+async function salvarEdital(request, env) {
+  try {
+    if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
+      return json({
+        ok: false,
+        erro: "Variáveis do Supabase não configuradas na Cloudflare.",
+      }, 500);
+    }
+
+    const body = await request.json();
+    const dados = body.resultado || body;
+
+    if (!dados.concurso || !Array.isArray(dados.disciplinas)) {
+      return json({
+        ok: false,
+        erro: "JSON inválido. Esperado: concurso e disciplinas.",
+      }, 400);
+    }
+
+    const concurso = dados.concurso;
+
+    const concursoCriado = await supabaseInsert(env, "concursos", {
+      nome: concurso.nome || null,
+      orgao: concurso.orgao || null,
+      cargo: concurso.cargo || null,
+      banca: concurso.banca || null,
+      data_prova: concurso.data_prova || null,
+      estrategia: concurso.estrategia || null,
+    });
+
+    const concursoId = concursoCriado.id;
+    let totalTopicos = 0;
+
+    for (const disciplina of dados.disciplinas) {
+      if (!disciplina.nome) continue;
+
+      const disciplinaCriada = await supabaseInsert(env, "disciplinas", {
+        concurso_id: concursoId,
+        nome: disciplina.nome,
+        prioridade: normalizarPrioridade(disciplina.prioridade),
+        peso: disciplina.peso || 1,
+      });
+
+      const topicos = Array.isArray(disciplina.topicos) ? disciplina.topicos : [];
+
+      for (const topico of topicos) {
+        if (!topico.nome) continue;
+
+        await supabaseInsert(env, "topicos", {
+          disciplina_id: disciplinaCriada.id,
+          nome: topico.nome,
+          status: topico.status || "pendente",
+        });
+
+        totalTopicos++;
+      }
+    }
+
+    return json({
+      ok: true,
+      concurso_id: concursoId,
+      disciplinas_salvas: dados.disciplinas.length,
+      topicos_salvos: totalTopicos,
+    });
+  } catch (error) {
+    return json({
+      ok: false,
+      erro: error.message,
+    }, 500);
+  }
+}
+
+async function supabaseInsert(env, tabela, payload) {
+  const response = await fetch(`${env.SUPABASE_URL}/rest/v1/${tabela}`, {
+    method: "POST",
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(`Erro ao inserir em ${tabela}: ${JSON.stringify(data)}`);
+  }
+
+  return data[0];
+}
+
+function extrairJson(texto) {
+  const inicio = texto.indexOf("{");
+  const fim = texto.lastIndexOf("}");
+
+  if (inicio === -1 || fim === -1 || fim <= inicio) {
+    throw new Error("A IA não retornou JSON válido.");
+  }
+
+  const bruto = texto.slice(inicio, fim + 1);
+  return JSON.parse(bruto);
+}
+
+function normalizarPrioridade(valor) {
+  const prioridade = String(valor || "media").toLowerCase();
+
+  if (prioridade === "alta") return "alta";
+  if (prioridade === "baixa") return "baixa";
+
+  return "media";
+}
+
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  };
+}
+
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      ...corsHeaders(),
+    },
+  });
 }
