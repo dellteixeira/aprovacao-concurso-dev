@@ -15,6 +15,11 @@ export default {
         service: "Aprova Concurso DEV",
         ai: Boolean(env.AI),
         supabase: Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY),
+        debug: {
+          tem_SUPABASE_URL: Boolean(env.SUPABASE_URL),
+          tem_SUPABASE_SERVICE_ROLE_KEY: Boolean(env.SUPABASE_SERVICE_ROLE_KEY),
+          variaveis_visiveis: Object.keys(env).sort(),
+        },
       });
     }
 
@@ -27,11 +32,14 @@ export default {
     }
 
     if (url.pathname.startsWith("/api/")) {
-      return json({
-        ok: false,
-        erro: "API existe, mas rota não encontrada",
-        path: url.pathname,
-      }, 404);
+      return json(
+        {
+          ok: false,
+          erro: "API existe, mas rota não encontrada",
+          path: url.pathname,
+        },
+        404
+      );
     }
 
     return env.ASSETS.fetch(request);
@@ -41,29 +49,38 @@ export default {
 async function analisarEdital(request, env) {
   try {
     if (!env.AI) {
-      return json({
-        ok: false,
-        erro: "Binding Workers AI não encontrado. Verifique se existe um binding chamado AI na Cloudflare.",
-      }, 500);
+      return json(
+        {
+          ok: false,
+          erro: "Binding Workers AI não encontrado. Verifique se existe um binding chamado AI na Cloudflare.",
+        },
+        500
+      );
     }
 
     const formData = await request.formData();
     const arquivo = formData.get("arquivo");
 
     if (!arquivo) {
-      return json({
-        ok: false,
-        erro: "Nenhum arquivo enviado. O campo esperado é 'arquivo'.",
-      }, 400);
+      return json(
+        {
+          ok: false,
+          erro: "Nenhum arquivo enviado. O campo esperado é 'arquivo'.",
+        },
+        400
+      );
     }
 
     const textoEdital = await arquivo.text();
 
     if (!textoEdital || textoEdital.trim().length < 20) {
-      return json({
-        ok: false,
-        erro: "O arquivo enviado está vazio ou possui texto insuficiente.",
-      }, 400);
+      return json(
+        {
+          ok: false,
+          erro: "O arquivo enviado está vazio ou possui texto insuficiente.",
+        },
+        400
+      );
     }
 
     const prompt = `
@@ -116,7 +133,8 @@ ${textoEdital}
       messages: [
         {
           role: "system",
-          content: "Você é um extrator de dados de edital. Sua resposta deve ser somente JSON válido.",
+          content:
+            "Você é um extrator de dados de edital. Sua resposta deve ser somente JSON válido.",
         },
         {
           role: "user",
@@ -138,30 +156,44 @@ ${textoEdital}
       resultado,
     });
   } catch (error) {
-    return json({
-      ok: false,
-      erro: error.message,
-    }, 500);
+    return json(
+      {
+        ok: false,
+        erro: error.message,
+      },
+      500
+    );
   }
 }
 
 async function salvarEdital(request, env) {
   try {
     if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
-      return json({
-        ok: false,
-        erro: "Variáveis do Supabase não configuradas na Cloudflare.",
-      }, 500);
+      return json(
+        {
+          ok: false,
+          erro: "Variáveis do Supabase não configuradas na Cloudflare.",
+          debug: {
+            tem_SUPABASE_URL: Boolean(env.SUPABASE_URL),
+            tem_SUPABASE_SERVICE_ROLE_KEY: Boolean(env.SUPABASE_SERVICE_ROLE_KEY),
+            variaveis_visiveis: Object.keys(env).sort(),
+          },
+        },
+        500
+      );
     }
 
     const body = await request.json();
     const dados = body.resultado || body;
 
     if (!dados.concurso || !Array.isArray(dados.disciplinas)) {
-      return json({
-        ok: false,
-        erro: "JSON inválido. Esperado: concurso e disciplinas.",
-      }, 400);
+      return json(
+        {
+          ok: false,
+          erro: "JSON inválido. Esperado: concurso e disciplinas.",
+        },
+        400
+      );
     }
 
     const concurso = dados.concurso;
@@ -176,6 +208,7 @@ async function salvarEdital(request, env) {
     });
 
     const concursoId = concursoCriado.id;
+    let totalDisciplinas = 0;
     let totalTopicos = 0;
 
     for (const disciplina of dados.disciplinas) {
@@ -188,7 +221,11 @@ async function salvarEdital(request, env) {
         peso: disciplina.peso || 1,
       });
 
-      const topicos = Array.isArray(disciplina.topicos) ? disciplina.topicos : [];
+      totalDisciplinas++;
+
+      const topicos = Array.isArray(disciplina.topicos)
+        ? disciplina.topicos
+        : [];
 
       for (const topico of topicos) {
         if (!topico.nome) continue;
@@ -206,14 +243,17 @@ async function salvarEdital(request, env) {
     return json({
       ok: true,
       concurso_id: concursoId,
-      disciplinas_salvas: dados.disciplinas.length,
+      disciplinas_salvas: totalDisciplinas,
       topicos_salvos: totalTopicos,
     });
   } catch (error) {
-    return json({
-      ok: false,
-      erro: error.message,
-    }, 500);
+    return json(
+      {
+        ok: false,
+        erro: error.message,
+      },
+      500
+    );
   }
 }
 
