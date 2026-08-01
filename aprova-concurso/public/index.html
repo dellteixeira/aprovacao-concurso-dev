@@ -64,6 +64,14 @@ body.dark .auth-empty-screen{background:#111c31;border-color:#2a3958}
 #questionDetailsModal .modal-box{position:relative;z-index:51}
 body.question-edit-open #questionDetailsModal .modal-box{filter:brightness(.72)}
 </style>
+
+<script id="pdfjsLibrary" src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script id="pdfjsWorkerConfig">
+  if (window.pdfjsLib) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+</script>
+<script id="mammothLibrary" src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
 </head><body class="auth-pending">
 <div class="app"><aside><div class="brand"><span class="mark">✦</span> Aprova</div><p class="nav-label">MENU PRINCIPAL</p><div class="nav">
 <button class="active" data-view="dashboard"><i class="ico">⌂</i><span>Visão geral</span></button><button data-view="contest"><i class="ico">◫</i><span>Meu concurso</span></button><button data-view="plan"><i class="ico">▤</i><span>Plano de estudos</span></button><button data-view="reviews"><i class="ico">◷</i><span>Revisões</span></button><button data-view="progress"><i class="ico">◉</i><span>Progresso</span></button></div><p class="nav-label">ORGANIZAÇÃO</p><div class="nav"><button data-view="history"><i class="ico">▦</i><span>Histórico</span></button><button data-view="settings"><i class="ico">⚙</i><span>Configurações</span></button></div><div class="side-progress"><b>Seu plano está evoluindo</b><p id="sideDeadline">Faltam 72 dias para sua prova. Continue consistente.</p><button data-view="plan">Ver planejamento</button></div></aside>
@@ -5345,20 +5353,270 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
 (() => {
   'use strict';
 
-  const ACCEPTED_EXTENSIONS = ['txt', 'md', 'json'];
-  const API_URL = '/api/ai/analisar-edital';
+  const ACCEPTED_EXTENSIONS = ['txt', 'md', 'json', 'pdf', 'docx', 'doc'];
+  const API_ANALISAR = '/api/ai/analisar-edital';
+  const API_SALVAR = '/api/ai/salvar-edital';
+  const MAX_CHARS_TO_AI = 95000;
+
+  let ultimaAnaliseCloudflare = null;
 
   const notify = message => {
     if (typeof window.toast === 'function') window.toast(message);
     else alert(message);
   };
 
-  const showAnalysis = message => {
+  const escapeHtml = value => String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+
+  const showAnalysis = (message, options = {}) => {
     const analysis = document.getElementById('analysis');
     if (!analysis) return;
     analysis.classList.add('show');
-    analysis.textContent = message;
+    if (options.html) analysis.innerHTML = message;
+    else analysis.textContent = message;
   };
+
+  const getFileExtension = file => {
+    const nome = (file?.name || '').toLowerCase();
+    const partes = nome.split('.');
+    return partes.length > 1 ? partes.pop() : '';
+  };
+
+  async function extrairTextoDoArquivo(file) {
+    const extensao = getFileExtension(file);
+
+    if (!ACCEPTED_EXTENSIONS.includes(extensao)) {
+      throw new Error('Formato não suportado. Envie .pdf, .txt, .docx, .doc, .md ou .json.');
+    }
+
+    if (extensao === 'txt' || extensao === 'md' || extensao === 'json') {
+      return (await file.text()).trim();
+    }
+
+    if (extensao === 'pdf') {
+      return await extrairTextoPdf(file);
+    }
+
+    if (extensao === 'docx') {
+      return await extrairTextoDocx(file);
+    }
+
+    if (extensao === 'doc') {
+      throw new Error('Arquivo .doc antigo não é lido com segurança pelo navegador. Salve como .docx ou .pdf e envie novamente.');
+    }
+
+    throw new Error('Formato não suportado.');
+  }
+
+  async function extrairTextoPdf(file) {
+    if (!window.pdfjsLib) {
+      throw new Error('Biblioteca PDF.js não carregou. Recarregue a página e tente novamente.');
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    const loadingTask = window.pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    const paginas = [];
+
+    for (let paginaNumero = 1; paginaNumero <= pdf.numPages; paginaNumero++) {
+      const pagina = await pdf.getPage(paginaNumero);
+      const conteudo = await pagina.getTextContent();
+      const textoPagina = conteudo.items
+        .map(item => item.str || '')
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (textoPagina) paginas.push(`--- Página ${paginaNumero} ---\n${textoPagina}`);
+    }
+
+    const texto = paginas.join('\n\n').trim();
+    if (!texto || texto.length < 50) {
+      throw new Error('Não consegui extrair texto suficiente do PDF. Ele pode estar escaneado como imagem. Converta com OCR ou envie um .txt/.docx.');
+    }
+
+    return texto;
+  }
+
+  async function extrairTextoDocx(file) {
+    if (!window.mammoth) {
+      throw new Error('Biblioteca Mammoth.js não carregou. Recarregue a página e tente novamente.');
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    const resultado = await window.mammoth.extractRawText({ arrayBuffer });
+    const texto = String(resultado.value || '').trim();
+
+    if (!texto || texto.length < 50) {
+      throw new Error('Não consegui extrair texto suficiente do DOCX. Verifique o arquivo ou envie em PDF/TXT.');
+    }
+
+    return texto;
+  }
+
+  function prepararTextoParaIA(texto) {
+    const limpo = String(texto || '')
+      .replace(/\u0000/g, '')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{4,}/g, '\n\n\n')
+      .trim();
+
+    if (limpo.length <= MAX_CHARS_TO_AI) return limpo;
+
+    return limpo.slice(0, MAX_CHARS_TO_AI) + '\n\n[AVISO: texto truncado automaticamente para respeitar o limite operacional da IA.]';
+  }
+
+  function normalizarResultado(resultado) {
+    const dados = resultado?.resultado || resultado?.resposta || resultado;
+    if (!dados || typeof dados !== 'object') return null;
+
+    if (dados.concurso && Array.isArray(dados.disciplinas)) return dados;
+
+    if (typeof dados.response === 'string') {
+      try {
+        const inicio = dados.response.indexOf('{');
+        const fim = dados.response.lastIndexOf('}');
+        if (inicio >= 0 && fim > inicio) {
+          const parsed = JSON.parse(dados.response.slice(inicio, fim + 1));
+          if (parsed.concurso && Array.isArray(parsed.disciplinas)) return parsed;
+        }
+      } catch (_) {}
+    }
+
+    return null;
+  }
+
+  function adaptarParaApp(vertical) {
+    const concurso = vertical.concurso || {};
+    return {
+      concurso: {
+        nome: concurso.nome || 'Concurso importado por IA',
+        orgao: concurso.orgao || '',
+        cargo: concurso.cargo || '',
+        banca: concurso.banca || '',
+        prova: concurso.data_prova || concurso.prova || '',
+        data_prova: concurso.data_prova || concurso.prova || null
+      },
+      estrategia: vertical.estrategia || concurso.estrategia || '',
+      disciplinas: (vertical.disciplinas || []).map((disciplina, indice) => ({
+        nome: disciplina.nome || `Disciplina ${indice + 1}`,
+        prioridade: ['alta', 'media', 'baixa'].includes(String(disciplina.prioridade || '').toLowerCase())
+          ? String(disciplina.prioridade).toLowerCase()
+          : 'media',
+        peso: Number(disciplina.peso || 1),
+        ordem: Number.isFinite(Number(disciplina.ordem)) ? Number(disciplina.ordem) : indice,
+        topicos: (disciplina.topicos || []).map(topico => ({
+          nome: typeof topico === 'string' ? topico : (topico.nome || ''),
+          concluido: Boolean(topico.concluido),
+          status: topico.status || (topico.concluido ? 'concluido' : 'pendente')
+        })).filter(topico => topico.nome)
+      })).filter(disciplina => disciplina.nome)
+    };
+  }
+
+  function aplicarVerticalizacaoNoApp(vertical) {
+    const adaptada = adaptarParaApp(vertical);
+
+    try {
+      if (typeof window.normalizarVerticalizacao === 'function') {
+        window.verticalizacaoImportada = window.normalizarVerticalizacao(adaptada);
+      } else {
+        window.verticalizacaoImportada = adaptada;
+      }
+    } catch (_) {
+      window.verticalizacaoImportada = adaptada;
+    }
+
+    try { verticalizacaoImportada = window.verticalizacaoImportada; } catch (_) {}
+
+    const info = window.verticalizacaoImportada.concurso || {};
+    const totalTopicos = (window.verticalizacaoImportada.disciplinas || [])
+      .reduce((total, disciplina) => total + (disciplina.topicos || []).length, 0);
+
+    const concursoAtual = {
+      nome: info.nome || 'Concurso importado por IA',
+      orgao: info.orgao || '',
+      cargo: info.cargo || '',
+      banca: info.banca || '',
+      prova: info.prova || info.data_prova || '',
+      materias: (window.verticalizacaoImportada.disciplinas || []).map(d => d.nome).join(', '),
+      topicos: totalTopicos
+    };
+
+    try { window.concursoEditavel = concursoAtual; concursoEditavel = concursoAtual; } catch (_) { window.concursoEditavel = concursoAtual; }
+    try { localStorage.setItem('aprovaConcurso', JSON.stringify(concursoAtual)); } catch (_) {}
+    try { localStorage.setItem('aprovaVerticalizacao', JSON.stringify(window.verticalizacaoImportada)); } catch (_) {}
+
+    try { if (typeof window.ordenarDisciplinasPorPrioridade === 'function') window.ordenarDisciplinasPorPrioridade(); } catch (_) {}
+    try { if (typeof window.salvarVerticalizacao === 'function') window.salvarVerticalizacao(); } catch (_) {}
+    try { if (typeof window.renderIndicadoresDoConcurso === 'function') window.renderIndicadoresDoConcurso(); } catch (_) {}
+    try { if (typeof window.renderConcurso === 'function') window.renderConcurso(); } catch (_) {}
+    try { if (typeof window.renderPlano === 'function') window.renderPlano(); } catch (_) {}
+    try { if (typeof window.renderTopicosImportados === 'function') window.renderTopicosImportados(); } catch (_) {}
+    try { if (typeof window.atualizarMateriasDisponiveis === 'function') window.atualizarMateriasDisponiveis(); } catch (_) {}
+    try { if (typeof window.renderFontesEdital === 'function') window.renderFontesEdital(); } catch (_) {}
+  }
+
+  async function salvarAnaliseNoSupabase() {
+    if (!ultimaAnaliseCloudflare) {
+      notify('Ainda não há análise para salvar.');
+      return;
+    }
+
+    try {
+      showAnalysis('⌛ Salvando concurso, disciplinas e tópicos no Supabase DEV...');
+      const response = await fetch(API_SALVAR, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ resultado: ultimaAnaliseCloudflare })
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.erro || 'Não foi possível salvar no Supabase.');
+      }
+
+      showAnalysis(`✓ Salvo no Supabase DEV.\nConcurso ID: ${data.concurso_id}\nDisciplinas: ${data.disciplinas_salvas}\nTópicos: ${data.topicos_salvos}`);
+      notify('Dados salvos no Supabase DEV.');
+    } catch (error) {
+      showAnalysis(`Erro ao salvar: ${error.message || 'falha no Supabase.'}`);
+      notify('Falha ao salvar no Supabase.');
+    }
+  }
+
+  function mostrarResultadoFinal(vertical, metadados) {
+    const totalDisciplinas = vertical.disciplinas?.length || 0;
+    const totalTopicos = (vertical.disciplinas || []).reduce((total, disciplina) => total + (disciplina.topicos || []).length, 0);
+    const concurso = vertical.concurso || {};
+    const jsonFormatado = JSON.stringify(vertical, null, 2);
+
+    showAnalysis(`
+      <div><strong>✓ Edital analisado com IA da Cloudflare</strong></div>
+      <div style="margin-top:8px">Arquivo: ${escapeHtml(metadados.nome_arquivo)} · Formato: ${escapeHtml(metadados.extensao.toUpperCase())}</div>
+      <div>Concurso: ${escapeHtml(concurso.nome || 'não identificado')}</div>
+      <div>Disciplinas: ${totalDisciplinas} · Tópicos: ${totalTopicos}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <button class="btn primary" type="button" id="saveCloudflareAiResult">Salvar no Supabase DEV</button>
+        <button class="btn" type="button" id="downloadCloudflareAiJson">Baixar JSON</button>
+      </div>
+      <pre style="white-space:pre-wrap;overflow:auto;max-height:360px;margin-top:12px;background:rgba(255,255,255,.48);border:1px solid var(--line);border-radius:10px;padding:12px">${escapeHtml(jsonFormatado)}</pre>
+    `, { html: true });
+
+    document.getElementById('saveCloudflareAiResult')?.addEventListener('click', salvarAnaliseNoSupabase);
+    document.getElementById('downloadCloudflareAiJson')?.addEventListener('click', () => {
+      const blob = new Blob([jsonFormatado], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'edital-verticalizado-cloudflare-ai.json';
+      link.click();
+      URL.revokeObjectURL(url);
+    });
+  }
 
   async function analisarEditalComCloudflareAI(file) {
     try {
@@ -5368,43 +5626,52 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
       }
 
       const nome = file.name || 'edital';
-      const extensao = nome.toLowerCase().split('.').pop();
+      const extensao = getFileExtension(file);
 
       if (!ACCEPTED_EXTENSIONS.includes(extensao)) {
-        showAnalysis('Nesta versão com Cloudflare Workers AI, envie o edital em .txt, .md ou .json. Para PDF, copie o texto do edital e salve como .txt.');
-        notify('Envie o edital em texto para usar a IA.');
+        showAnalysis('Formato não suportado. Envie .pdf, .txt, .docx, .doc, .md ou .json.');
+        notify('Formato de arquivo não suportado.');
         return;
       }
 
-      showAnalysis('⌛ Lendo o arquivo e enviando para a IA da Cloudflare...');
+      showAnalysis(`⌛ Lendo ${nome}...`);
+      const textoExtraido = await extrairTextoDoArquivo(file);
+      const textoParaIA = prepararTextoParaIA(textoExtraido);
 
-      const texto = await file.text();
-
-      if (!texto || texto.trim().length < 50) {
+      if (!textoParaIA || textoParaIA.length < 50) {
         showAnalysis('Erro: o arquivo parece estar vazio ou muito curto para análise.');
         return;
       }
 
-      const response = await fetch(API_URL, {
+      showAnalysis('⌛ Texto extraído. Enviando para a IA da Cloudflare...');
+
+      const response = await fetch(API_ANALISAR, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ texto })
+        body: JSON.stringify({
+          nome_arquivo: nome,
+          tipo_arquivo: file.type || extensao,
+          texto_edital: textoParaIA,
+          texto: textoParaIA
+        })
       });
 
-      let data;
-      try {
-        data = await response.json();
-      } catch (_) {
-        throw new Error('A API retornou uma resposta inválida.');
+      const data = await response.json().catch(() => null);
+      if (!data) throw new Error('A API retornou uma resposta inválida.');
+      if (!response.ok || !data.ok) throw new Error(data.erro || 'A IA não conseguiu analisar o edital.');
+
+      const vertical = normalizarResultado(data);
+      if (!vertical) {
+        const bruto = data.resposta?.response || data.resposta || data.resultado || data;
+        showAnalysis(typeof bruto === 'string' ? bruto : JSON.stringify(bruto, null, 2));
+        notify('A IA respondeu, mas o JSON não veio no formato esperado.');
+        return;
       }
 
-      if (!response.ok || !data.ok) {
-        throw new Error(data.erro || 'A IA não conseguiu analisar o edital.');
-      }
-
-      const conteudo = data.resposta?.response || data.resposta || '';
-      showAnalysis(typeof conteudo === 'string' ? conteudo : JSON.stringify(conteudo, null, 2));
-      notify('Análise feita pela IA da Cloudflare.');
+      ultimaAnaliseCloudflare = vertical;
+      aplicarVerticalizacaoNoApp(vertical);
+      mostrarResultadoFinal(vertical, { nome_arquivo: nome, extensao });
+      notify('Análise concluída. JSON aplicado ao app.');
     } catch (error) {
       showAnalysis(`Erro: ${error.message || 'não foi possível analisar o edital.'}`);
       notify('Falha na análise com IA.');
@@ -5422,13 +5689,21 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     antigoBotao.replaceWith(botao);
     antigoInput.replaceWith(input);
 
-    botao.textContent = 'Analisar com IA';
-    botao.title = 'Enviar arquivo .txt, .md ou .json para análise pela Cloudflare Workers AI';
+    const areaUpload = botao.closest('.upload');
+    if (areaUpload) {
+      const titulo = areaUpload.querySelector('h3');
+      const descricao = areaUpload.querySelector('p');
+      if (titulo) titulo.textContent = 'Analisar edital com IA Cloudflare';
+      if (descricao) descricao.textContent = 'Envie .pdf, .txt, .docx, .doc, .md ou .json. PDFs escaneados precisam de OCR.';
+    }
+
+    botao.textContent = 'Analisar edital com IA';
+    botao.title = 'Enviar .pdf, .txt, .docx, .doc, .md ou .json para análise pela Cloudflare Workers AI';
     botao.disabled = false;
     botao.removeAttribute('disabled');
     botao.removeAttribute('aria-disabled');
 
-    input.accept = '.txt,.md,.json,text/plain,application/json';
+    input.accept = '.pdf,.txt,.docx,.doc,.md,.json,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,application/json';
     input.hidden = true;
     input.setAttribute('aria-hidden', 'true');
 
@@ -5445,6 +5720,7 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     }, true);
 
     window.enviarEdital = analisarEditalComCloudflareAI;
+    window.salvarAnaliseCloudflareNoSupabase = salvarAnaliseNoSupabase;
   }
 
   if (document.readyState === 'loading') {
