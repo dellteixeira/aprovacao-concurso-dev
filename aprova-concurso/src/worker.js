@@ -2,17 +2,35 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // Rota de teste da IA
-    if (url.pathname === "/api/ai/teste" && request.method === "GET") {
+    // Teste simples para confirmar que o Worker está interceptando /api
+    if (url.pathname === "/api/ping") {
+      return json({
+        ok: true,
+        rota: "/api/ping",
+        mensagem: "Worker DEV respondendo corretamente."
+      });
+    }
+
+    // Teste da IA Cloudflare
+    if (url.pathname === "/api/ai/teste") {
       return handleAiTeste(env);
     }
 
-    // Rota para análise de edital/texto
+    // Análise de edital em texto
     if (url.pathname === "/api/ai/analisar-edital" && request.method === "POST") {
       return handleAnalisarEdital(request, env);
     }
 
-    // Entrega o HTML/CSS/JS da pasta public
+    // Qualquer outra rota /api não encontrada
+    if (url.pathname.startsWith("/api/")) {
+      return json({
+        ok: false,
+        erro: "Rota de API não encontrada.",
+        path: url.pathname
+      }, 404);
+    }
+
+    // Demais rotas entregam o app da pasta public
     return env.ASSETS.fetch(request);
   }
 };
@@ -21,13 +39,21 @@ function json(data, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: {
-      "content-type": "application/json; charset=utf-8"
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
     }
   });
 }
 
 async function handleAiTeste(env) {
   try {
+    if (!env.AI) {
+      return json({
+        ok: false,
+        erro: "Binding env.AI não encontrado."
+      }, 500);
+    }
+
     const resposta = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
       messages: [
         {
@@ -43,11 +69,13 @@ async function handleAiTeste(env) {
 
     return json({
       ok: true,
+      rota: "/api/ai/teste",
       resposta
     });
   } catch (error) {
     return json({
       ok: false,
+      rota: "/api/ai/teste",
       erro: error.message || "Erro ao chamar Workers AI."
     }, 500);
   }
@@ -123,11 +151,13 @@ ${textoLimitado}
 
     return json({
       ok: true,
+      rota: "/api/ai/analisar-edital",
       resposta
     });
   } catch (error) {
     return json({
       ok: false,
+      rota: "/api/ai/analisar-edital",
       erro: error.message || "Erro ao analisar edital."
     }, 500);
   }
