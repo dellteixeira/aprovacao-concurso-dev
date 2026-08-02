@@ -8,109 +8,52 @@ const ESQUEMA_EDITAL = {
     concurso: {
       type: "object",
       properties: {
-        nome: {
-          type: "string",
-        },
-        orgao: {
-          type: "string",
-        },
-        cargo: {
-          type: "string",
-        },
-        banca: {
-          type: "string",
-        },
-        data_prova: {
-          type: "string",
-        },
+        nome: { type: "string" },
+        orgao: { type: "string" },
+        cargo: { type: "string" },
+        banca: { type: "string" },
+        data_prova: { type: "string" },
       },
-      required: [
-        "nome",
-        "orgao",
-        "cargo",
-        "banca",
-        "data_prova",
-      ],
+      required: ["nome", "orgao", "cargo", "banca", "data_prova"],
     },
-
     disciplinas: {
       type: "array",
       minItems: 1,
-
       items: {
         type: "object",
-
         properties: {
-          nome: {
-            type: "string",
-          },
-
+          nome: { type: "string" },
           prioridade: {
             type: "string",
-            enum: [
-              "alta",
-              "media",
-              "baixa",
-            ],
+            enum: ["alta", "media", "baixa"],
           },
-
           peso: {
             type: "integer",
             minimum: 1,
           },
-
           topicos: {
             type: "array",
             minItems: 1,
-
             items: {
               type: "object",
-
               properties: {
-                nome: {
-                  type: "string",
-                },
-
-                concluido: {
-                  type: "boolean",
-                },
-
+                nome: { type: "string" },
+                concluido: { type: "boolean" },
                 status: {
                   type: "string",
-                  enum: [
-                    "pendente",
-                  ],
+                  enum: ["pendente"],
                 },
               },
-
-              required: [
-                "nome",
-                "concluido",
-                "status",
-              ],
+              required: ["nome", "concluido", "status"],
             },
           },
         },
-
-        required: [
-          "nome",
-          "prioridade",
-          "peso",
-          "topicos",
-        ],
+        required: ["nome", "prioridade", "peso", "topicos"],
       },
     },
-
-    estrategia: {
-      type: "string",
-    },
+    estrategia: { type: "string" },
   },
-
-  required: [
-    "concurso",
-    "disciplinas",
-    "estrategia",
-  ],
+  required: ["concurso", "disciplinas", "estrategia"],
 };
 
 export default {
@@ -119,13 +62,10 @@ export default {
 
     try {
       if (request.method === "OPTIONS") {
-        return new Response(
-          null,
-          {
-            status: 204,
-            headers: corsHeaders(),
-          }
-        );
+        return new Response(null, {
+          status: 204,
+          headers: corsHeaders(),
+        });
       }
 
       if (
@@ -134,44 +74,22 @@ export default {
       ) {
         return json({
           ok: true,
-
-          service:
-            "Aprova Concurso DEV",
-
-          modelo_teste:
-            MODELO_TESTE,
-
-          modelo_extracao:
-            MODELO_EXTRACAO,
-
-          ai:
-            Boolean(env.AI),
-
-          assets:
-            Boolean(env.ASSETS),
-
-          supabase:
-            Boolean(
-              env.SUPABASE_URL &&
+          service: "Aprova Concurso DEV",
+          modelo_teste: MODELO_TESTE,
+          modelo_extracao: MODELO_EXTRACAO,
+          ai: Boolean(env.AI),
+          assets: Boolean(env.ASSETS),
+          supabase: Boolean(
+            env.SUPABASE_URL &&
+            env.SUPABASE_SERVICE_ROLE_KEY
+          ),
+          debug: {
+            tem_AI: Boolean(env.AI),
+            tem_ASSETS: Boolean(env.ASSETS),
+            tem_SUPABASE_URL: Boolean(env.SUPABASE_URL),
+            tem_SUPABASE_SERVICE_ROLE_KEY: Boolean(
               env.SUPABASE_SERVICE_ROLE_KEY
             ),
-
-          debug: {
-            tem_AI:
-              Boolean(env.AI),
-
-            tem_ASSETS:
-              Boolean(env.ASSETS),
-
-            tem_SUPABASE_URL:
-              Boolean(
-                env.SUPABASE_URL
-              ),
-
-            tem_SUPABASE_SERVICE_ROLE_KEY:
-              Boolean(
-                env.SUPABASE_SERVICE_ROLE_KEY
-              ),
           },
         });
       }
@@ -184,77 +102,47 @@ export default {
       }
 
       if (
-        url.pathname ===
-          "/api/ai/analisar-edital" &&
+        url.pathname === "/api/ai/analisar-edital" &&
         request.method === "POST"
       ) {
-        return analisarEdital(
-          request,
-          env
-        );
+        return analisarEdital(request, env);
       }
 
       if (
-        url.pathname ===
-          "/api/ai/salvar-edital" &&
+        url.pathname === "/api/ai/salvar-edital" &&
         request.method === "POST"
       ) {
-        return salvarEdital(
-          request,
-          env
-        );
+        return salvarEdital(request, env);
       }
 
-      if (
-        url.pathname.startsWith(
-          "/api/"
-        )
-      ) {
+      if (url.pathname.startsWith("/api/")) {
         return json(
           {
             ok: false,
-
-            erro:
-              "Rota da API não encontrada.",
-
-            path:
-              url.pathname,
+            erro: "Rota da API não encontrada.",
+            path: url.pathname,
           },
           404
         );
       }
 
       if (env.ASSETS) {
-        return env.ASSETS.fetch(
-          request
-        );
+        return env.ASSETS.fetch(request);
       }
 
-      return new Response(
-        "Aprova Concurso DEV",
-        {
-          status: 200,
-
-          headers: {
-            "Content-Type":
-              "text/plain; charset=utf-8",
-          },
-        }
-      );
+      return new Response("Aprova Concurso DEV", {
+        status: 200,
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+        },
+      });
     } catch (error) {
-      console.error(
-        "Erro não tratado no Worker:",
-        error
-      );
+      console.error("Erro não tratado no Worker:", error);
 
       return json(
         {
           ok: false,
-
-          erro:
-            obterMensagemErro(
-              error
-            ),
+          erro: obterMensagemErro(error),
         },
         500
       );
@@ -262,103 +150,61 @@ export default {
   },
 };
 
-async function testarWorkersAI(
-  env
-) {
+async function testarWorkersAI(env) {
   try {
     if (!env.AI) {
       return json(
         {
           ok: false,
-
-          etapa:
-            "binding",
-
-          erro:
-            "Binding AI não encontrado.",
+          etapa: "binding",
+          erro: "Binding AI não encontrado.",
         },
         500
       );
     }
 
-    const inicio =
-      Date.now();
+    const inicio = Date.now();
 
-    const resultado =
-      await env.AI.run(
-        MODELO_TESTE,
-        {
-          messages: [
-            {
-              role:
-                "system",
+    const resultado = await env.AI.run(
+      MODELO_TESTE,
+      {
+        messages: [
+          {
+            role: "system",
+            content:
+              "Responda somente com a palavra OK. Não explique.",
+          },
+          {
+            role: "user",
+            content: "Responda OK.",
+          },
+        ],
+        max_completion_tokens: 500,
+        reasoning_effort: "low",
+        temperature: 0,
+      }
+    );
 
-              content:
-                "Responda somente com a palavra OK. Não explique.",
-            },
-
-            {
-              role:
-                "user",
-
-              content:
-                "Responda OK.",
-            },
-          ],
-
-          max_completion_tokens:
-            500,
-
-          reasoning_effort:
-            "low",
-
-          temperature:
-            0,
-        }
-      );
-
-    const escolha =
-      resultado
-        ?.choices?.[0] ||
-      null;
+    const escolha = resultado?.choices?.[0] || null;
 
     const conteudo =
-      escolha
-        ?.message
-        ?.content ||
-      resultado
-        ?.response ||
-      resultado
-        ?.result ||
+      escolha?.message?.content ||
+      resultado?.response ||
+      resultado?.result ||
       null;
 
     return json({
       ok: true,
-
-      modelo:
-        MODELO_TESTE,
-
-      duracao_ms:
-        Date.now() -
-        inicio,
-
+      modelo: MODELO_TESTE,
+      duracao_ms: Date.now() - inicio,
       teste: {
         conteudo,
-
         finish_reason:
-          escolha
-            ?.finish_reason ||
-          null,
-
+          escolha?.finish_reason || null,
         completion_tokens:
-          resultado
-            ?.usage
-            ?.completion_tokens ||
-          null,
+          resultado?.usage?.completion_tokens || null,
       },
-
-      resultado_completo:
-        resultado,
+      resultado_completo: resultado,
     });
   } catch (error) {
     console.error(
@@ -369,37 +215,22 @@ async function testarWorkersAI(
     return json(
       {
         ok: false,
-
-        etapa:
-          "inferencia",
-
-        modelo:
-          MODELO_TESTE,
-
-        erro:
-          obterMensagemErro(
-            error
-          ),
-
-        tipo:
-          error?.name ||
-          null,
+        etapa: "inferencia",
+        modelo: MODELO_TESTE,
+        erro: obterMensagemErro(error),
+        tipo: error?.name || null,
       },
       500
     );
   }
 }
 
-async function analisarEdital(
-  request,
-  env
-) {
+async function analisarEdital(request, env) {
   try {
     if (!env.AI) {
       return json(
         {
           ok: false,
-
           erro:
             "Binding Workers AI não encontrado.",
         },
@@ -408,9 +239,7 @@ async function analisarEdital(
     }
 
     const dados =
-      await lerDadosDaRequisicao(
-        request
-      );
+      await lerDadosDaRequisicao(request);
 
     const textoOriginal =
       textoSeguro(
@@ -438,7 +267,6 @@ async function analisarEdital(
       return json(
         {
           ok: false,
-
           erro:
             "Nenhum texto foi extraído do edital. Se o PDF for escaneado, aplique OCR antes da análise.",
         },
@@ -446,14 +274,10 @@ async function analisarEdital(
       );
     }
 
-    if (
-      textoOriginal.length <
-      100
-    ) {
+    if (textoOriginal.length < 100) {
       return json(
         {
           ok: false,
-
           erro:
             "O texto extraído possui menos de 100 caracteres e não é suficiente para verticalizar o edital.",
         },
@@ -467,12 +291,11 @@ async function analisarEdital(
         LIMITE_CARACTERES_EDITAL
       );
 
-    const prompt =
-      montarPrompt({
-        textoEdital,
-        nomeArquivo,
-        tipoArquivo,
-      });
+    const prompt = montarPrompt({
+      textoEdital,
+      nomeArquivo,
+      tipoArquivo,
+    });
 
     const respostaBruta =
       await executarExtracaoEstruturada(
@@ -492,64 +315,36 @@ async function analisarEdital(
 
     return json({
       ok: true,
-
       resultado,
-
-      resposta:
-        resultado,
-
-      analise:
-        resultado,
-
+      resposta: resultado,
+      analise: resultado,
       arquivo: {
-        nome:
-          nomeArquivo ||
-          null,
-
-        tipo:
-          tipoArquivo ||
-          null,
-
+        nome: nomeArquivo || null,
+        tipo: tipoArquivo || null,
         caracteres_recebidos:
           textoOriginal.length,
-
         caracteres_analisados:
           textoEdital.length,
-
         texto_cortado:
           textoOriginal.length >
           LIMITE_CARACTERES_EDITAL,
       },
-
-      modelo:
-        MODELO_EXTRACAO,
+      modelo: MODELO_EXTRACAO,
     });
   } catch (error) {
     console.error(
       "Erro ao analisar edital:",
       {
-        erro:
-          obterMensagemErro(
-            error
-          ),
-
-        stack:
-          error?.stack ||
-          null,
+        erro: obterMensagemErro(error),
+        stack: error?.stack || null,
       }
     );
 
     return json(
       {
         ok: false,
-
-        erro:
-          obterMensagemErro(
-            error
-          ),
-
-        modelo:
-          MODELO_EXTRACAO,
+        erro: obterMensagemErro(error),
+        modelo: MODELO_EXTRACAO,
       },
       500
     );
@@ -566,43 +361,27 @@ async function executarExtracaoEstruturada(
       {
         messages: [
           {
-            role:
-              "system",
-
+            role: "system",
             content:
-              "Você extrai conteúdo programático de editais de concursos. Use apenas informações existentes no documento.",
+              "Você extrai conteúdo programático de editais de concursos. Use somente informações existentes no documento.",
           },
-
           {
-            role:
-              "user",
-
-            content:
-              prompt,
+            role: "user",
+            content: prompt,
           },
         ],
-
         response_format: {
-          type:
-            "json_schema",
-
-          json_schema:
-            ESQUEMA_EDITAL,
+          type: "json_schema",
+          json_schema: ESQUEMA_EDITAL,
         },
-
-        max_tokens:
-          8000,
-
-        temperature:
-          0,
+        max_tokens: 8000,
+        temperature: 0,
       }
     );
   } catch (erroJsonMode) {
     console.warn(
       "JSON Mode falhou. Executando tentativa de recuperação:",
-      obterMensagemErro(
-        erroJsonMode
-      )
+      obterMensagemErro(erroJsonMode)
     );
 
     return env.AI.run(
@@ -610,35 +389,23 @@ async function executarExtracaoEstruturada(
       {
         messages: [
           {
-            role:
-              "system",
-
+            role: "system",
             content:
               "Extraia o conteúdo do edital e retorne exclusivamente JSON válido, sem markdown nem explicações.",
           },
-
           {
-            role:
-              "user",
-
-            content:
-              prompt,
+            role: "user",
+            content: prompt,
           },
         ],
-
-        max_tokens:
-          8000,
-
-        temperature:
-          0,
+        max_tokens: 8000,
+        temperature: 0,
       }
     );
   }
 }
 
-async function lerDadosDaRequisicao(
-  request
-) {
+async function lerDadosDaRequisicao(request) {
   const contentType =
     textoSeguro(
       request.headers.get(
@@ -651,13 +418,11 @@ async function lerDadosDaRequisicao(
       "application/json"
     )
   ) {
-    const body =
-      await request.json();
+    const body = await request.json();
 
     if (
       !body ||
-      typeof body !==
-        "object" ||
+      typeof body !== "object" ||
       Array.isArray(body)
     ) {
       throw new Error(
@@ -686,18 +451,14 @@ async function lerDadosDaRequisicao(
       of formData.entries()
     ) {
       if (
-        typeof valor ===
-        "string"
+        typeof valor === "string"
       ) {
-        dados[chave] =
-          valor;
+        dados[chave] = valor;
       }
     }
 
     const arquivo =
-      formData.get(
-        "arquivo"
-      );
+      formData.get("arquivo");
 
     if (
       arquivo &&
@@ -708,12 +469,10 @@ async function lerDadosDaRequisicao(
         await arquivo.text();
 
       dados.nome_arquivo =
-        arquivo.name ||
-        "";
+        arquivo.name || "";
 
       dados.tipo_arquivo =
-        arquivo.type ||
-        "";
+        arquivo.type || "";
     }
 
     return dados;
@@ -727,7 +486,6 @@ async function lerDadosDaRequisicao(
     return {
       texto_edital:
         await request.text(),
-
       tipo_arquivo:
         "text/plain",
     };
@@ -816,9 +574,7 @@ ${textoEdital}
 `;
 }
 
-function interpretarRespostaDaIa(
-  resposta
-) {
+function interpretarRespostaDaIa(resposta) {
   if (!resposta) {
     throw new Error(
       "A IA retornou uma resposta vazia."
@@ -842,14 +598,11 @@ function interpretarRespostaDaIa(
   }
 
   const escolha =
-    resposta
-      ?.choices?.[0] ||
+    resposta?.choices?.[0] ||
     null;
 
   const parsed =
-    escolha
-      ?.message
-      ?.parsed;
+    escolha?.message?.parsed;
 
   if (
     possuiEstruturaDeEdital(
@@ -860,18 +613,14 @@ function interpretarRespostaDaIa(
   }
 
   const finishReason =
-    escolha
-      ?.finish_reason ||
+    escolha?.finish_reason ||
     null;
 
   const conteudo =
-    escolha
-      ?.message
-      ?.content;
+    escolha?.message?.content;
 
   if (
-    finishReason ===
-      "length" &&
+    finishReason === "length" &&
     !conteudo
   ) {
     throw new Error(
@@ -882,8 +631,7 @@ function interpretarRespostaDaIa(
   const candidatos = [
     resposta.response,
     resposta.result,
-    resposta.result
-      ?.response,
+    resposta.result?.response,
     resposta.text,
     resposta.output_text,
     conteudo,
@@ -921,7 +669,7 @@ function interpretarRespostaDaIa(
           return objeto;
         }
       } catch {
-        // Continua testando os demais formatos.
+        // Continua.
       }
     }
   }
@@ -1014,9 +762,7 @@ function interpretarRespostaDaIa(
 
   console.error(
     "Resposta da IA não reconhecida:",
-    JSON.stringify(
-      resposta
-    ).slice(
+    JSON.stringify(resposta).slice(
       0,
       10000
     )
@@ -1030,25 +776,19 @@ function interpretarRespostaDaIa(
   );
 }
 
-function possuiEstruturaDeEdital(
-  valor
-) {
+function possuiEstruturaDeEdital(valor) {
   return Boolean(
     valor &&
-    typeof valor ===
-      "object" &&
+    typeof valor === "object" &&
     !Array.isArray(valor) &&
     Array.isArray(
       valor.disciplinas
     ) &&
-    valor.disciplinas
-      .length > 0
+    valor.disciplinas.length > 0
   );
 }
 
-function extrairJson(
-  valor
-) {
+function extrairJson(valor) {
   if (
     valor &&
     typeof valor ===
@@ -1122,13 +862,10 @@ function extrairJson(
   );
 }
 
-function normalizarResultado(
-  resultado
-) {
+function normalizarResultado(resultado) {
   if (
     !resultado ||
-    typeof resultado !==
-      "object" ||
+    typeof resultado !== "object" ||
     Array.isArray(resultado)
   ) {
     throw new Error(
@@ -1200,22 +937,15 @@ function normalizarResultado(
                       typeof topico ===
                         "string"
                         ? topico
-                        : topico
-                            ?.nome ||
-                          topico
-                            ?.assunto ||
-                          topico
-                            ?.topico ||
-                          topico
-                            ?.conteudo
+                        : topico?.nome ||
+                          topico?.assunto ||
+                          topico?.topico ||
+                          topico?.conteudo
                     ),
-
                   concluido:
                     false,
-
                   status:
                     "pendente",
-
                   ordem,
                 })
               )
@@ -1234,20 +964,16 @@ function normalizarResultado(
                   indice + 1
                 }`
               ),
-
             prioridade:
               normalizarPrioridade(
                 disciplina.prioridade
               ),
-
             peso:
               normalizarPeso(
                 disciplina.peso
               ),
-
             ordem:
               indice,
-
             topicos,
           };
         }
@@ -1255,13 +981,10 @@ function normalizarResultado(
       .filter(
         (disciplina) =>
           disciplina.nome &&
-          disciplina.topicos
-            .length
+          disciplina.topicos.length
       );
 
-  if (
-    !disciplinas.length
-  ) {
+  if (!disciplinas.length) {
     throw new Error(
       "A IA não retornou disciplinas com tópicos válidos."
     );
@@ -1275,26 +998,22 @@ function normalizarResultado(
           concurso.titulo ||
           resultado.nome_concurso
         ),
-
       orgao:
         textoSeguro(
           concurso.orgao ||
           concurso["órgão"] ||
           resultado.orgao
         ),
-
       cargo:
         textoSeguro(
           concurso.cargo ||
           resultado.cargo
         ),
-
       banca:
         textoSeguro(
           concurso.banca ||
           resultado.banca
         ),
-
       data_prova:
         normalizarData(
           concurso.data_prova ||
@@ -1302,9 +1021,7 @@ function normalizarResultado(
           resultado.data_prova
         ),
     },
-
     disciplinas,
-
     estrategia:
       textoSeguro(
         resultado.estrategia ||
@@ -1313,10 +1030,7 @@ function normalizarResultado(
   };
 }
 
-async function salvarEdital(
-  request,
-  env
-) {
+async function salvarEdital(request, env) {
   try {
     validarSupabase(env);
 
@@ -1335,7 +1049,6 @@ async function salvarEdital(
       return json(
         {
           ok: false,
-
           erro:
             "A rota salvar-edital aceita somente application/json.",
         },
@@ -1370,7 +1083,6 @@ async function salvarEdital(
       return json(
         {
           ok: false,
-
           erro:
             "O campo user_id é obrigatório.",
         },
@@ -1382,7 +1094,6 @@ async function salvarEdital(
       return json(
         {
           ok: false,
-
           erro:
             "O campo concurso_id é obrigatório.",
         },
@@ -1390,170 +1101,49 @@ async function salvarEdital(
       );
     }
 
-    await supabaseUpdate(
-      env,
-      "concursos",
-      {
-        titulo:
-          dados.concurso.nome ||
-          null,
+    const resultado =
+      await supabaseRpc(
+        env,
+        "salvar_edital_verticalizado",
+        {
+          p_user_id:
+            userId,
+          p_concurso_id:
+            concursoId,
+          p_dados:
+            dados,
+        }
+      );
 
-        nome:
-          dados.concurso.nome ||
-          null,
-
-        orgao:
-          dados.concurso.orgao ||
-          null,
-
-        cargo:
-          dados.concurso.cargo ||
-          null,
-
-        banca:
-          dados.concurso.banca ||
-          null,
-
-        data_prova:
-          dados.concurso
-            .data_prova ||
-          null,
-
-        estado:
-          "ativo",
-
-        ativo:
-          true,
-
-        updated_at:
-          new Date()
-            .toISOString(),
-      },
-      {
-        id:
-          concursoId,
-
-        user_id:
-          userId,
-      }
-    );
-
-    await excluirVerticalizacaoAnterior(
-      env,
-      concursoId,
-      userId
-    );
-
-    let totalDisciplinas =
-      0;
-
-    let totalTopicos =
-      0;
-
-    for (
-      const [
-        indice,
-        disciplina,
-      ]
-      of dados.disciplinas
-        .entries()
-    ) {
-      const criada =
-        await supabaseInsert(
-          env,
-          "disciplinas",
-          {
-            concurso_id:
-              concursoId,
-
-            user_id:
-              userId,
-
-            nome:
-              disciplina.nome,
-
-            prioridade:
-              disciplina.prioridade,
-
-            peso:
-              disciplina.peso,
-
-            ordem:
-              indice,
+    return json(
+      resultado &&
+      typeof resultado ===
+        "object"
+        ? resultado
+        : {
+            ok: true,
+            mensagem:
+              "Edital verticalizado salvo com sucesso.",
+            resultado,
           }
-        );
-
-      if (!criada?.id) {
-        throw new Error(
-          `O Supabase não retornou o ID da disciplina "${disciplina.nome}".`
-        );
-      }
-
-      totalDisciplinas++;
-
-      for (
-        const [
-          ordem,
-          topico,
-        ]
-        of disciplina.topicos
-          .entries()
-      ) {
-        await supabaseInsert(
-          env,
-          "topicos",
-          {
-            disciplina_id:
-              criada.id,
-
-            concurso_id:
-              concursoId,
-
-            user_id:
-              userId,
-
-            nome:
-              topico.nome,
-
-            status:
-              "pendente",
-
-            concluido:
-              false,
-
-            ordem,
-          }
-        );
-
-        totalTopicos++;
-      }
-    }
-
-    return json({
-      ok: true,
-
-      mensagem:
-        "Edital verticalizado salvo com sucesso.",
-
-      concurso_id:
-        concursoId,
-
-      disciplinas_salvas:
-        totalDisciplinas,
-
-      topicos_salvos:
-        totalTopicos,
-    });
+    );
   } catch (error) {
     console.error(
       "Erro ao salvar edital:",
-      error
+      {
+        erro:
+          obterMensagemErro(
+            error
+          ),
+        stack:
+          error?.stack ||
+          null,
+      }
     );
 
     return json(
       {
         ok: false,
-
         erro:
           obterMensagemErro(
             error
@@ -1564,141 +1154,28 @@ async function salvarEdital(
   }
 }
 
-async function excluirVerticalizacaoAnterior(
+async function supabaseRpc(
   env,
-  concursoId,
-  userId
-) {
-  const disciplinas =
-    await supabaseSelect(
-      env,
-      "disciplinas",
-      {
-        concurso_id:
-          concursoId,
-
-        user_id:
-          userId,
-      },
-      "id"
-    );
-
-  for (
-    const disciplina
-    of disciplinas
-  ) {
-    await supabaseDelete(
-      env,
-      "topicos",
-      {
-        disciplina_id:
-          disciplina.id,
-
-        concurso_id:
-          concursoId,
-
-        user_id:
-          userId,
-      }
-    );
-  }
-
-  await supabaseDelete(
-    env,
-    "disciplinas",
-    {
-      concurso_id:
-        concursoId,
-
-      user_id:
-        userId,
-    }
-  );
-}
-
-async function supabaseSelect(
-  env,
-  tabela,
-  filtros = {},
-  campos = "*"
-) {
-  const parametros =
-    montarFiltros(
-      filtros
-    );
-
-  parametros.set(
-    "select",
-    campos
-  );
-
-  parametros.set(
-    "limit",
-    "10000"
-  );
-
-  const response =
-    await fetch(
-      `${obterSupabaseUrl(
-        env
-      )}/rest/v1/${tabela}?${parametros.toString()}`,
-      {
-        method:
-          "GET",
-
-        headers:
-          supabaseHeaders(
-            env
-          ),
-      }
-    );
-
-  const data =
-    await lerRespostaHttp(
-      response
-    );
-
-  if (!response.ok) {
-    throw new Error(
-      `Erro ao consultar ${tabela}: ${JSON.stringify(
-        data
-      )}`
-    );
-  }
-
-  return Array.isArray(
-    data
-  )
-    ? data
-    : [];
-}
-
-async function supabaseInsert(
-  env,
-  tabela,
-  payload
+  nomeFuncao,
+  parametros
 ) {
   const response =
     await fetch(
       `${obterSupabaseUrl(
         env
-      )}/rest/v1/${tabela}`,
+      )}/rest/v1/rpc/${nomeFuncao}`,
       {
-        method:
-          "POST",
-
+        method: "POST",
         headers: {
           ...supabaseHeaders(
             env
           ),
-
           Prefer:
             "return=representation",
         },
-
         body:
           JSON.stringify(
-            payload
+            parametros
           ),
       }
     );
@@ -1710,70 +1187,7 @@ async function supabaseInsert(
 
   if (!response.ok) {
     throw new Error(
-      `Erro ao inserir em ${tabela}: ${JSON.stringify(
-        data
-      )}`
-    );
-  }
-
-  if (
-    !Array.isArray(
-      data
-    ) ||
-    !data[0]
-  ) {
-    throw new Error(
-      `O Supabase não retornou o registro criado em ${tabela}.`
-    );
-  }
-
-  return data[0];
-}
-
-async function supabaseUpdate(
-  env,
-  tabela,
-  payload,
-  filtros
-) {
-  const parametros =
-    montarFiltros(
-      filtros
-    );
-
-  const response =
-    await fetch(
-      `${obterSupabaseUrl(
-        env
-      )}/rest/v1/${tabela}?${parametros.toString()}`,
-      {
-        method:
-          "PATCH",
-
-        headers: {
-          ...supabaseHeaders(
-            env
-          ),
-
-          Prefer:
-            "return=representation",
-        },
-
-        body:
-          JSON.stringify(
-            payload
-          ),
-      }
-    );
-
-  const data =
-    await lerRespostaHttp(
-      response
-    );
-
-  if (!response.ok) {
-    throw new Error(
-      `Erro ao atualizar ${tabela}: ${JSON.stringify(
+      `Erro na função ${nomeFuncao}: ${JSON.stringify(
         data
       )}`
     );
@@ -1782,82 +1196,7 @@ async function supabaseUpdate(
   return data;
 }
 
-async function supabaseDelete(
-  env,
-  tabela,
-  filtros
-) {
-  const parametros =
-    montarFiltros(
-      filtros
-    );
-
-  const response =
-    await fetch(
-      `${obterSupabaseUrl(
-        env
-      )}/rest/v1/${tabela}?${parametros.toString()}`,
-      {
-        method:
-          "DELETE",
-
-        headers: {
-          ...supabaseHeaders(
-            env
-          ),
-
-          Prefer:
-            "return=minimal",
-        },
-      }
-    );
-
-  const data =
-    await lerRespostaHttp(
-      response
-    );
-
-  if (!response.ok) {
-    throw new Error(
-      `Erro ao excluir em ${tabela}: ${JSON.stringify(
-        data
-      )}`
-    );
-  }
-
-  return data;
-}
-
-function montarFiltros(
-  filtros = {}
-) {
-  const parametros =
-    new URLSearchParams();
-
-  for (
-    const [campo, valor]
-    of Object.entries(
-      filtros
-    )
-  ) {
-    if (
-      valor !== null &&
-      valor !== undefined &&
-      valor !== ""
-    ) {
-      parametros.set(
-        campo,
-        `eq.${valor}`
-      );
-    }
-  }
-
-  return parametros;
-}
-
-function validarSupabase(
-  env
-) {
+function validarSupabase(env) {
   if (
     !textoSeguro(
       env.SUPABASE_URL
@@ -1872,9 +1211,7 @@ function validarSupabase(
   }
 }
 
-function obterSupabaseUrl(
-  env
-) {
+function obterSupabaseUrl(env) {
   return textoSeguro(
     env.SUPABASE_URL
   ).replace(
@@ -1883,9 +1220,7 @@ function obterSupabaseUrl(
   );
 }
 
-function supabaseHeaders(
-  env
-) {
+function supabaseHeaders(env) {
   const chave =
     textoSeguro(
       env.SUPABASE_SERVICE_ROLE_KEY
@@ -1898,9 +1233,7 @@ function supabaseHeaders(
   }
 
   const headers = {
-    apikey:
-      chave,
-
+    apikey: chave,
     "Content-Type":
       "application/json",
   };
@@ -1917,9 +1250,7 @@ function supabaseHeaders(
   return headers;
 }
 
-async function lerRespostaHttp(
-  response
-) {
+async function lerRespostaHttp(response) {
   const texto =
     await response.text();
 
@@ -1936,9 +1267,7 @@ async function lerRespostaHttp(
   }
 }
 
-function normalizarPrioridade(
-  valor
-) {
+function normalizarPrioridade(valor) {
   const prioridade =
     removerAcentos(
       textoSeguro(
@@ -1955,9 +1284,7 @@ function normalizarPrioridade(
     : "media";
 }
 
-function normalizarPeso(
-  valor
-) {
+function normalizarPeso(valor) {
   const peso =
     Number(valor);
 
@@ -1971,9 +1298,7 @@ function normalizarPeso(
     : 1;
 }
 
-function normalizarData(
-  valor
-) {
+function normalizarData(valor) {
   const texto =
     textoSeguro(
       valor
@@ -2007,9 +1332,7 @@ function normalizarData(
   return "";
 }
 
-function removerAcentos(
-  valor
-) {
+function removerAcentos(valor) {
   return textoSeguro(
     valor
   )
@@ -2022,9 +1345,7 @@ function removerAcentos(
     );
 }
 
-function textoSeguro(
-  valor
-) {
+function textoSeguro(valor) {
   return valor ===
       null ||
     valor ===
@@ -2035,9 +1356,7 @@ function textoSeguro(
       ).trim();
 }
 
-function obterMensagemErro(
-  error
-) {
+function obterMensagemErro(error) {
   return error instanceof
     Error
     ? error.message
@@ -2051,19 +1370,14 @@ function corsHeaders() {
   return {
     "Access-Control-Allow-Origin":
       "*",
-
     "Access-Control-Allow-Methods":
       "GET, POST, PATCH, DELETE, OPTIONS",
-
     "Access-Control-Allow-Headers":
       "Content-Type, Authorization",
   };
 }
 
-function json(
-  data,
-  status = 200
-) {
+function json(data, status = 200) {
   return new Response(
     JSON.stringify(
       data,
@@ -2072,14 +1386,11 @@ function json(
     ),
     {
       status,
-
       headers: {
         "Content-Type":
           "application/json; charset=utf-8",
-
         "Cache-Control":
           "no-store",
-
         ...corsHeaders(),
       },
     }
