@@ -2,13 +2,18 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "aprovacao-concurso-dev",
   "main": "src/worker.js",
-  "compatibility_date": "2026-08-01",
+  "compatibility_date": "2026-08-02",
   "keep_vars": true,
+
+  "vars": {
+    "SUPABASE_URL": "https://yuanmubqdorsabrweqrm.supabase.co"
+  },
 
   "assets": {
     "directory": "./public",
     "binding": "ASSETS"
   },
+
   "ai": {
     "binding": "AI"
   }
