@@ -5551,7 +5551,16 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
   const MAX_CHARS_TO_AI = 80000;
 
   let ultimaAnaliseCloudflare = null;
-  let cargoSelecionadoIndex = -1;
+
+  /*
+   * A seleção usa uma chave estável e não depende da posição
+   * do cargo na lista.
+   */
+  let cargoSelecionadoChave = '';
+
+  /* Preserva a posição manual da barra de rolagem. */
+  let scrollListaCargos = 0;
+
   let metadadosUltimoArquivo = null;
 
   const textoSeguro = value => String(value ?? '').trim();
@@ -5758,6 +5767,37 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     return null;
   }
 
+  function normalizarChaveCargo(valor) {
+    return textoSeguro(valor)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  function gerarChaveCargo(cargo, indice = 0) {
+    const partes = [
+      cargo?.codigo,
+      cargo?.nome,
+      cargo?.especialidade,
+      cargo?.nivel
+    ]
+      .map(textoSeguro)
+      .filter(Boolean)
+      .join('|');
+
+    return normalizarChaveCargo(partes) || `cargo-${indice}`;
+  }
+
+  function obterIndiceCargoSelecionado() {
+    if (!ultimaAnaliseCloudflare || !Array.isArray(ultimaAnaliseCloudflare.cargos)) return -1;
+
+    return ultimaAnaliseCloudflare.cargos.findIndex(
+      (cargo, indice) => gerarChaveCargo(cargo, indice) === cargoSelecionadoChave
+    );
+  }
+
   function montarNomeCargo(cargo) {
     return [textoSeguro(cargo?.nome), textoSeguro(cargo?.especialidade)]
       .filter(Boolean)
@@ -5808,9 +5848,15 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
   }
 
   function obterCargoSelecionado() {
-    if (!ultimaAnaliseCloudflare || !Array.isArray(ultimaAnaliseCloudflare.cargos)) return null;
-    if (cargoSelecionadoIndex < 0 || cargoSelecionadoIndex >= ultimaAnaliseCloudflare.cargos.length) return null;
-    return ultimaAnaliseCloudflare.cargos[cargoSelecionadoIndex];
+    if (
+      !ultimaAnaliseCloudflare ||
+      !Array.isArray(ultimaAnaliseCloudflare.cargos) ||
+      !cargoSelecionadoChave
+    ) return null;
+
+    return ultimaAnaliseCloudflare.cargos.find(
+      (cargo, indice) => gerarChaveCargo(cargo, indice) === cargoSelecionadoChave
+    ) || null;
   }
 
   function renderizarResumoCargoSelecionado() {
@@ -5842,14 +5888,29 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
 
     const edital = ultimaAnaliseCloudflare;
     const concurso = edital.concurso || {};
-    const totalDisciplinas = edital.cargos.reduce((total, cargo) => total + cargo.disciplinas.length, 0);
-    const totalTopicos = edital.cargos.reduce((total, cargo) => total + contarTopicos(cargo.disciplinas), 0);
-    const cardsCargos = edital.cargos.map((cargo, indice) => {
-      const selecionado = indice === cargoSelecionadoIndex;
+    const cargos = Array.isArray(edital.cargos) ? edital.cargos : [];
+    const totalDisciplinas = cargos.reduce((total, cargo) => total + cargo.disciplinas.length, 0);
+    const totalTopicos = cargos.reduce((total, cargo) => total + contarTopicos(cargo.disciplinas), 0);
+
+    const cardsCargos = cargos.map((cargo, indice) => {
+      const chaveCargo = gerarChaveCargo(cargo, indice);
+      const selecionado = chaveCargo === cargoSelecionadoChave;
+
       return `
-        <label style="display:block;border:2px solid ${selecionado ? 'var(--blue)' : 'var(--line)'};border-radius:12px;padding:13px;cursor:pointer;background:${selecionado ? 'var(--soft)' : 'transparent'}">
+        <label
+          data-cloudflare-cargo-card
+          data-cargo-chave="${escapeHtml(chaveCargo)}"
+          style="display:block;border:2px solid ${selecionado ? 'var(--blue)' : 'var(--line)'};border-radius:12px;padding:13px;cursor:pointer;background:${selecionado ? 'var(--soft)' : 'transparent'}"
+        >
           <div style="display:grid;grid-template-columns:22px 1fr;gap:10px;align-items:start">
-            <input type="radio" name="cargoCloudflareAi" value="${indice}" ${selecionado ? 'checked' : ''} style="margin-top:3px;accent-color:var(--blue)" />
+            <input
+              type="radio"
+              name="cargoCloudflareAi"
+              value="${escapeHtml(chaveCargo)}"
+              data-cargo-indice="${indice}"
+              ${selecionado ? 'checked' : ''}
+              style="margin-top:3px;accent-color:var(--blue)"
+            />
             <div>
               <strong style="display:block;font-size:13px;color:var(--ink)">${escapeHtml(montarNomeCargo(cargo))}</strong>
               <div style="margin-top:5px;color:var(--muted);font-size:11px;line-height:1.5">
@@ -5872,23 +5933,31 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
         <div>Concurso: ${escapeHtml(concurso.nome || 'não identificado')}</div>
         <div>Órgão: ${escapeHtml(concurso.orgao || 'não identificado')}</div>
         <div>Banca: ${escapeHtml(concurso.banca || 'não identificada')}</div>
-        <div>Cargos: ${edital.cargos.length} · Disciplinas vinculadas: ${totalDisciplinas} · Tópicos: ${totalTopicos}</div>
+        <div>Cargos: ${cargos.length} · Disciplinas vinculadas: ${totalDisciplinas} · Tópicos: ${totalTopicos}</div>
       </div>
       <div style="margin-top:16px;font-weight:850;color:var(--ink)">Selecione o cargo para montar sua grade:</div>
       <div id="cloudflareCargoList" style="display:grid;gap:9px;margin-top:10px;max-height:430px;overflow:auto;padding-right:4px">${cardsCargos}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
-        <button class="btn primary" type="button" id="applyCloudflareCargo" ${cargoSelecionadoIndex < 0 ? 'disabled' : ''}>Aplicar cargo ao aplicativo</button>
-        <button class="btn" type="button" id="saveCloudflareAiResult" ${cargoSelecionadoIndex < 0 ? 'disabled' : ''}>Salvar cargo no Supabase</button>
+        <button class="btn primary" type="button" id="applyCloudflareCargo" ${!cargoSelecionadoChave ? 'disabled' : ''}>Aplicar cargo ao aplicativo</button>
+        <button class="btn" type="button" id="saveCloudflareAiResult" ${!cargoSelecionadoChave ? 'disabled' : ''}>Salvar cargo no Supabase</button>
         <button class="btn" type="button" id="toggleCloudflareJson">Mostrar JSON completo</button>
       </div>
       <div id="cloudflareSelectedCargoSummary" style="margin-top:12px">${renderizarResumoCargoSelecionado()}</div>
       <pre id="cloudflareFullJson" style="display:none;white-space:pre-wrap;overflow:auto;max-height:420px;margin-top:12px;background:rgba(255,255,255,.48);border:1px solid var(--line);border-radius:10px;padding:12px">${escapeHtml(JSON.stringify(edital, null, 2))}</pre>
     `, { html: true });
 
+    const listaCargos = document.getElementById('cloudflareCargoList');
+    if (listaCargos) {
+      listaCargos.scrollTop = scrollListaCargos;
+      listaCargos.addEventListener('scroll', () => {
+        scrollListaCargos = listaCargos.scrollTop;
+      }, { passive: true });
+    }
+
     document.querySelectorAll('input[name="cargoCloudflareAi"]').forEach(input => {
       input.addEventListener('change', event => {
-        cargoSelecionadoIndex = Number(event.target.value);
-        renderizarSeletorDeCargos();
+        cargoSelecionadoChave = textoSeguro(event.target.value);
+        atualizarSelecaoCargoSemRerender();
       });
     });
 
@@ -5903,6 +5972,31 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     });
   }
 
+  function atualizarSelecaoCargoSemRerender() {
+    const cargo = obterCargoSelecionado();
+
+    document.querySelectorAll('[data-cloudflare-cargo-card]').forEach(card => {
+      const selecionado = card.dataset.cargoChave === cargoSelecionadoChave;
+      card.style.borderColor = selecionado ? 'var(--blue)' : 'var(--line)';
+      card.style.background = selecionado ? 'var(--soft)' : 'transparent';
+
+      const radio = card.querySelector('input[name="cargoCloudflareAi"]');
+      if (radio) radio.checked = selecionado;
+    });
+
+    const botaoAplicar = document.getElementById('applyCloudflareCargo');
+    const botaoSalvar = document.getElementById('saveCloudflareAiResult');
+    if (botaoAplicar) botaoAplicar.disabled = !cargo;
+    if (botaoSalvar) botaoSalvar.disabled = !cargo;
+
+    const resumo = document.getElementById('cloudflareSelectedCargoSummary');
+    if (resumo) resumo.innerHTML = renderizarResumoCargoSelecionado();
+
+    try {
+      localStorage.setItem('aprovaCargoSelecionadoChave', cargoSelecionadoChave);
+    } catch (_) {}
+  }
+
   function aplicarCargoSelecionadoNoApp() {
     const cargo = obterCargoSelecionado();
     if (!cargo) {
@@ -5911,13 +6005,40 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     }
 
     const verticalizacao = criarVerticalizacaoDoCargo(ultimaAnaliseCloudflare, cargo);
+
+    /* Mantém como referência a estrutura exata do cargo escolhido. */
+    let verticalizacaoFinal = verticalizacao;
+
     try {
-      window.verticalizacaoImportada = typeof window.normalizarVerticalizacao === 'function'
-        ? window.normalizarVerticalizacao(verticalizacao)
-        : verticalizacao;
-    } catch (_) {
-      window.verticalizacaoImportada = verticalizacao;
+      if (typeof window.normalizarVerticalizacao === 'function') {
+        const candidata = window.normalizarVerticalizacao(verticalizacao);
+        const disciplinasOriginais = Array.isArray(verticalizacao.disciplinas) ? verticalizacao.disciplinas : [];
+        const disciplinasNormalizadas = Array.isArray(candidata?.disciplinas) ? candidata.disciplinas : [];
+        const topicosOriginais = contarTopicos(disciplinasOriginais);
+        const topicosNormalizados = contarTopicos(disciplinasNormalizadas);
+
+        const normalizacaoPreservouConteudo =
+          disciplinasNormalizadas.length === disciplinasOriginais.length &&
+          topicosNormalizados >= topicosOriginais;
+
+        if (normalizacaoPreservouConteudo) {
+          verticalizacaoFinal = {
+            ...verticalizacao,
+            ...candidata,
+            concurso: {
+              ...verticalizacao.concurso,
+              ...(candidata.concurso || {}),
+              cargo: verticalizacao.concurso.cargo
+            },
+            disciplinas: disciplinasNormalizadas
+          };
+        }
+      }
+    } catch (erroNormalizacao) {
+      console.warn('A normalização antiga foi ignorada para preservar o cargo selecionado:', erroNormalizacao);
     }
+
+    window.verticalizacaoImportada = JSON.parse(JSON.stringify(verticalizacaoFinal));
 
     try { verticalizacaoImportada = window.verticalizacaoImportada; } catch (_) {}
 
@@ -5939,7 +6060,13 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
       localStorage.setItem('aprovaConcurso', JSON.stringify(concursoAtual));
       localStorage.setItem('aprovaVerticalizacao', JSON.stringify(window.verticalizacaoImportada));
       localStorage.setItem('aprovaUltimoEditalMulticargos', JSON.stringify(ultimaAnaliseCloudflare));
-      localStorage.setItem('aprovaCargoSelecionadoIndex', String(cargoSelecionadoIndex));
+      localStorage.setItem('aprovaCargoSelecionadoChave', cargoSelecionadoChave);
+      localStorage.setItem('aprovaCargoSelecionado', JSON.stringify({
+        chave: cargoSelecionadoChave,
+        nome: cargo.nome || '',
+        especialidade: cargo.especialidade || '',
+        codigo: cargo.codigo || ''
+      }));
     } catch (_) {}
 
     [
@@ -5961,7 +6088,7 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     }));
     document.dispatchEvent(new CustomEvent('aprova:render'));
     notify(`Cargo aplicado: ${montarNomeCargo(cargo)}`);
-    return verticalizacao;
+    return window.verticalizacaoImportada;
   }
 
   async function localizarConcursoAtivoId(client, user) {
@@ -6080,7 +6207,8 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
       }
 
       ultimaAnaliseCloudflare = null;
-      cargoSelecionadoIndex = -1;
+      cargoSelecionadoChave = '';
+      scrollListaCargos = 0;
       metadadosUltimoArquivo = { nome_arquivo: nome, extensao };
 
       showAnalysis(`⌛ Lendo ${nome}...`);
@@ -6119,7 +6247,9 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
       if (!vertical) throw new Error('A IA respondeu, mas não retornou cargos com disciplinas e tópicos válidos.');
 
       ultimaAnaliseCloudflare = vertical;
-      cargoSelecionadoIndex = vertical.cargos.length === 1 ? 0 : -1;
+      cargoSelecionadoChave = vertical.cargos.length === 1
+        ? gerarChaveCargo(vertical.cargos[0], 0)
+        : '';
       try { localStorage.setItem('aprovaUltimoEditalMulticargos', JSON.stringify(vertical)); } catch (_) {}
       renderizarSeletorDeCargos();
       notify(`${vertical.cargos.length} cargo(s) identificado(s). Selecione o cargo desejado.`);
@@ -6138,10 +6268,14 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     const antigoInput = document.getElementById('fileInput');
     if (!antigoBotao || !antigoInput) return;
 
+    if (antigoBotao.dataset.cloudflareMulticargosAtivo === '1') return;
+
     const botao = antigoBotao.cloneNode(true);
     const input = antigoInput.cloneNode(true);
     antigoBotao.replaceWith(botao);
     antigoInput.replaceWith(input);
+    botao.dataset.cloudflareMulticargosAtivo = '1';
+    input.dataset.cloudflareMulticargosAtivo = '1';
 
     const areaUpload = botao.closest('.upload');
     if (areaUpload) {
