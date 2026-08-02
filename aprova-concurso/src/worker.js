@@ -1,5 +1,5 @@
 const MODELO_IA = "@cf/zai-org/glm-4.7-flash";
-const LIMITE_CARACTERES_EDITAL = 60000;
+const LIMITE_CARACTERES_EDITAL = 45000;
 
 export default {
   async fetch(request, env) {
@@ -22,7 +22,7 @@ export default {
           assets: Boolean(env.ASSETS),
           supabase: Boolean(
             env.SUPABASE_URL &&
-            env.SUPABASE_SERVICE_ROLE_KEY
+              env.SUPABASE_SERVICE_ROLE_KEY
           ),
           debug: {
             tem_AI: Boolean(env.AI),
@@ -39,14 +39,18 @@ export default {
       }
 
       if (
+        url.pathname === "/api/ai/teste" &&
+        request.method === "GET"
+      ) {
+        return testarWorkersAI(env);
+      }
+
+      if (
         url.pathname ===
           "/api/ai/analisar-edital" &&
         request.method === "POST"
       ) {
-        return await analisarEdital(
-          request,
-          env
-        );
+        return analisarEdital(request, env);
       }
 
       if (
@@ -54,18 +58,14 @@ export default {
           "/api/ai/salvar-edital" &&
         request.method === "POST"
       ) {
-        return await salvarEdital(
-          request,
-          env
-        );
+        return salvarEdital(request, env);
       }
 
       if (url.pathname.startsWith("/api/")) {
         return json(
           {
             ok: false,
-            erro:
-              "API existente, mas a rota não foi encontrada.",
+            erro: "Rota da API não encontrada.",
             path: url.pathname,
           },
           404
@@ -103,9 +103,65 @@ export default {
   },
 };
 
-/* =========================================================
-   ANÁLISE DO EDITAL
-========================================================= */
+async function testarWorkersAI(env) {
+  try {
+    if (!env.AI) {
+      return json(
+        {
+          ok: false,
+          etapa: "binding",
+          erro: "Binding AI não encontrado.",
+        },
+        500
+      );
+    }
+
+    const inicio = Date.now();
+
+    const resultado = await env.AI.run(
+      MODELO_IA,
+      {
+        messages: [
+          {
+            role: "system",
+            content:
+              "Responda de maneira curta e direta.",
+          },
+          {
+            role: "user",
+            content:
+              "Responda somente com a palavra OK.",
+          },
+        ],
+        max_completion_tokens: 20,
+        temperature: 0,
+      }
+    );
+
+    return json({
+      ok: true,
+      modelo: MODELO_IA,
+      duracao_ms: Date.now() - inicio,
+      resultado,
+    });
+  } catch (error) {
+    console.error(
+      "Falha no teste do Workers AI:",
+      error
+    );
+
+    return json(
+      {
+        ok: false,
+        etapa: "inferencia",
+        modelo: MODELO_IA,
+        erro: obterMensagemErro(error),
+        tipo: error?.name || null,
+      },
+      500
+    );
+  }
+}
 
 async function analisarEdital(
   request,
@@ -117,7 +173,7 @@ async function analisarEdital(
         {
           ok: false,
           erro:
-            "Binding Workers AI não encontrado. Configure um binding chamado AI na Cloudflare.",
+            "Binding Workers AI não encontrado.",
         },
         500
       );
@@ -128,27 +184,27 @@ async function analisarEdital(
         request
       );
 
-    const textoOriginal = String(
-      dados.texto_edital ||
-      dados.textoEdital ||
-      dados.texto ||
-      dados.conteudo ||
-      ""
-    ).trim();
+    const textoOriginal =
+      textoSeguro(
+        dados.texto_edital ||
+          dados.textoEdital ||
+          dados.texto ||
+          dados.conteudo
+      );
 
-    const nomeArquivo = String(
-      dados.nome_arquivo ||
-      dados.nomeArquivo ||
-      dados.filename ||
-      ""
-    ).trim();
+    const nomeArquivo =
+      textoSeguro(
+        dados.nome_arquivo ||
+          dados.nomeArquivo ||
+          dados.filename
+      );
 
-    const tipoArquivo = String(
-      dados.tipo_arquivo ||
-      dados.tipoArquivo ||
-      dados.type ||
-      ""
-    ).trim();
+    const tipoArquivo =
+      textoSeguro(
+        dados.tipo_arquivo ||
+          dados.tipoArquivo ||
+          dados.type
+      );
 
     if (!textoOriginal) {
       return json(
@@ -166,7 +222,7 @@ async function analisarEdital(
         {
           ok: false,
           erro:
-            "O texto extraído está vazio ou possui conteúdo insuficiente.",
+            "O texto extraído é insuficiente para análise.",
         },
         400
       );
@@ -192,29 +248,23 @@ async function analisarEdital(
             {
               role: "system",
               content:
-                "Você extrai informações de editais de concursos públicos. Responda somente com JSON válido, sem markdown, comentários ou explicações.",
+                "Extraia informações de editais de concursos. Responda somente com JSON válido, sem markdown, comentários ou explicações.",
             },
             {
               role: "user",
               content: prompt,
             },
           ],
+          max_completion_tokens: 6000,
+          temperature: 0.1,
         }
-      );
-
-    console.log(
-      "Workers AI respondeu usando:",
-      MODELO_IA
-    );
-
-    const respostaInterpretada =
-      interpretarRespostaDaIa(
-        respostaBruta
       );
 
     const resultado =
       normalizarResultado(
-        respostaInterpretada
+        interpretarRespostaDaIa(
+          respostaBruta
+        )
       );
 
     return json({
@@ -236,18 +286,15 @@ async function analisarEdital(
       modelo: MODELO_IA,
     });
   } catch (error) {
-    const mensagem =
-      obterMensagemErro(error);
-
     console.error(
       "Erro ao analisar edital:",
-      mensagem
+      error
     );
 
     return json(
       {
         ok: false,
-        erro: mensagem,
+        erro: obterMensagemErro(error),
         modelo: MODELO_IA,
       },
       500
@@ -255,35 +302,23 @@ async function analisarEdital(
   }
 }
 
-/* =========================================================
-   LEITURA DA REQUISIÇÃO
-========================================================= */
-
 async function lerDadosDaRequisicao(
   request
 ) {
-  const contentType = String(
-    request.headers.get(
-      "content-type"
-    ) || ""
-  ).toLowerCase();
+  const contentType =
+    textoSeguro(
+      request.headers.get(
+        "content-type"
+      )
+    ).toLowerCase();
 
   if (
     contentType.includes(
       "application/json"
     )
   ) {
-    let body;
-
-    try {
-      body = await request.json();
-    } catch (error) {
-      throw new Error(
-        `O corpo da requisição não contém JSON válido: ${obterMensagemErro(
-          error
-        )}`
-      );
-    }
+    const body =
+      await request.json();
 
     if (
       !body ||
@@ -291,7 +326,7 @@ async function lerDadosDaRequisicao(
       Array.isArray(body)
     ) {
       throw new Error(
-        "O corpo JSON está vazio ou possui estrutura inválida."
+        "O corpo JSON possui estrutura inválida."
       );
     }
 
@@ -327,7 +362,6 @@ async function lerDadosDaRequisicao(
 
     if (
       arquivo &&
-      typeof arquivo === "object" &&
       typeof arquivo.text ===
         "function"
     ) {
@@ -352,20 +386,19 @@ async function lerDadosDaRequisicao(
     return {
       texto_edital:
         await request.text(),
-      tipo_arquivo: "text/plain",
+
+      tipo_arquivo:
+        "text/plain",
     };
   }
 
   throw new Error(
     `Content-Type não suportado: ${
-      contentType || "não informado"
+      contentType ||
+      "não informado"
     }.`
   );
 }
-
-/* =========================================================
-   PROMPT DA IA
-========================================================= */
 
 function montarPrompt({
   textoEdital,
@@ -373,16 +406,7 @@ function montarPrompt({
   tipoArquivo,
 }) {
   return `
-Analise o edital de concurso público abaixo.
-
-Retorne SOMENTE um objeto JSON válido.
-
-Não use markdown.
-Não use bloco de código.
-Não escreva comentários.
-Não escreva texto antes ou depois do JSON.
-
-Use exatamente esta estrutura:
+Analise o edital abaixo e retorne SOMENTE JSON válido neste formato:
 
 {
   "concurso": {
@@ -395,7 +419,7 @@ Use exatamente esta estrutura:
   "disciplinas": [
     {
       "nome": "",
-      "prioridade": "alta",
+      "prioridade": "alta|media|baixa",
       "peso": 1,
       "topicos": [
         {
@@ -409,44 +433,39 @@ Use exatamente esta estrutura:
   "estrategia": ""
 }
 
-REGRAS:
+Regras:
 
-1. Identifique concurso, órgão, cargo, banca e data da prova.
-2. Localize o conteúdo programático.
-3. Extraia todas as disciplinas.
-4. Extraia todos os tópicos e subtópicos.
-5. Preserve os nomes utilizados no edital.
-6. Não misture disciplinas.
-7. Não invente conteúdos.
-8. Use string vazia quando uma informação não existir.
-9. Use AAAA-MM-DD para a data.
-10. Prioridade deve ser alta, media ou baixa.
-11. O peso deve ser inteiro e igual ou maior que 1.
-12. Cada tópico deve ter concluido false.
-13. Cada tópico deve ter status pendente.
-14. O campo estrategia deve ser curto.
+1. Extraia todas as disciplinas, tópicos e subtópicos do conteúdo programático.
+2. Preserve a terminologia do edital.
+3. Não invente informações.
+4. Use string vazia para dados ausentes.
+5. Use AAAA-MM-DD para a data.
+6. Prioridade deve ser alta, media ou baixa.
+7. Peso deve ser inteiro e no mínimo 1.
+8. Todos os tópicos começam com concluido=false e status="pendente".
 
-ARQUIVO:
+Arquivo: ${
+    nomeArquivo ||
+    "não informado"
+  }
 
-Nome: ${nomeArquivo || "não informado"}
-Tipo: ${tipoArquivo || "não informado"}
+Tipo: ${
+    tipoArquivo ||
+    "não informado"
+  }
 
-CONTEÚDO:
+EDITAL:
 
 ${textoEdital}
 `;
 }
-
-/* =========================================================
-   INTERPRETAÇÃO DA RESPOSTA DA IA
-========================================================= */
 
 function interpretarRespostaDaIa(
   resposta
 ) {
   if (!resposta) {
     throw new Error(
-      "A IA retornou uma resposta vazia."
+      "A IA retornou resposta vazia."
     );
   }
 
@@ -458,87 +477,41 @@ function interpretarRespostaDaIa(
     return resposta;
   }
 
-  if (
-    typeof resposta.response ===
-    "string"
-  ) {
-    return extrairJson(
-      resposta.response
-    );
-  }
+  const candidatos = [
+    resposta.response,
+    resposta.result,
+    resposta.result?.response,
+    resposta.text,
+    resposta.output_text,
+    resposta.choices?.[0]
+      ?.message?.content,
+    resposta.choices?.[0]?.text,
+  ];
 
-  if (
-    typeof resposta.result ===
-    "string"
+  for (
+    const candidato
+    of candidatos
   ) {
-    return extrairJson(
-      resposta.result
-    );
-  }
-
-  if (
-    resposta.result &&
-    possuiEstruturaDeEdital(
-      resposta.result
-    )
-  ) {
-    return resposta.result;
-  }
-
-  if (
-    resposta.result &&
-    typeof resposta.result.response ===
-      "string"
-  ) {
-    return extrairJson(
-      resposta.result.response
-    );
-  }
-
-  if (
-    Array.isArray(
-      resposta.choices
-    ) &&
-    resposta.choices.length
-  ) {
-    const escolha =
-      resposta.choices[0];
-
     if (
-      typeof escolha?.message
-        ?.content === "string"
+      possuiEstruturaDeEdital(
+        candidato
+      )
     ) {
-      return extrairJson(
-        escolha.message.content
-      );
+      return candidato;
     }
 
     if (
-      typeof escolha?.text ===
+      typeof candidato ===
       "string"
     ) {
-      return extrairJson(
-        escolha.text
-      );
+      try {
+        return extrairJson(
+          candidato
+        );
+      } catch {
+        // Continua.
+      }
     }
-  }
-
-  if (
-    typeof resposta.text ===
-    "string"
-  ) {
-    return extrairJson(
-      resposta.text
-    );
-  }
-
-  if (
-    typeof resposta.output_text ===
-    "string"
-  ) {
-    return extrairJson(
-      resposta.output_text
-    );
   }
 
   if (
@@ -558,51 +531,34 @@ function interpretarRespostaDaIa(
         return item;
       }
 
-      if (
-        typeof item === "string"
-      ) {
-        try {
-          return extrairJson(item);
-        } catch {
-          // Continua.
-        }
-      }
+      const textos = [
+        item,
+        item?.text,
+        item?.content,
+      ];
 
-      if (
-        typeof item?.text ===
-        "string"
+      for (
+        const texto
+        of textos
       ) {
-        try {
-          return extrairJson(
-            item.text
-          );
-        } catch {
-          // Continua.
-        }
-      }
-
-      if (
-        typeof item?.content ===
-        "string"
-      ) {
-        try {
-          return extrairJson(
-            item.content
-          );
-        } catch {
-          // Continua.
+        if (
+          typeof texto ===
+          "string"
+        ) {
+          try {
+            return extrairJson(
+              texto
+            );
+          } catch {
+            // Continua.
+          }
         }
       }
     }
   }
 
-  console.error(
-    "Formato da IA não reconhecido:",
-    JSON.stringify(resposta)
-  );
-
   throw new Error(
-    "A IA respondeu, mas o formato recebido não foi reconhecido."
+    "A resposta da IA não contém uma verticalização reconhecível."
   );
 }
 
@@ -611,112 +567,96 @@ function possuiEstruturaDeEdital(
 ) {
   return Boolean(
     valor &&
-    typeof valor === "object" &&
-    !Array.isArray(valor) &&
-    (
-      Array.isArray(
-        valor.disciplinas
-      ) ||
-      Array.isArray(
-        valor.materias
+      typeof valor ===
+        "object" &&
+      !Array.isArray(valor) &&
+      (
+        Array.isArray(
+          valor.disciplinas
+        ) ||
+        Array.isArray(
+          valor.materias
+        )
       )
-    )
   );
 }
-
-/* =========================================================
-   EXTRAÇÃO DO JSON
-========================================================= */
 
 function extrairJson(valor) {
   if (
     valor &&
-    typeof valor === "object" &&
+    typeof valor ===
+      "object" &&
     !Array.isArray(valor)
   ) {
     return valor;
   }
 
-  const texto = String(
-    valor || ""
-  ).trim();
+  const texto =
+    textoSeguro(valor);
 
   if (!texto) {
     throw new Error(
-      "A IA retornou um texto vazio."
+      "A IA retornou texto vazio."
     );
   }
 
-  try {
-    return JSON.parse(texto);
-  } catch {
-    // Continua.
-  }
+  const candidatos = [
+    texto,
+    texto
+      .replace(
+        /^```(?:json)?\s*/i,
+        ""
+      )
+      .replace(
+        /\s*```$/i,
+        ""
+      )
+      .trim(),
+  ];
 
-  const semMarkdown = texto
-    .replace(
-      /^```(?:json)?\s*/i,
-      ""
-    )
-    .replace(
-      /\s*```$/i,
-      ""
-    )
-    .trim();
-
-  try {
-    return JSON.parse(
-      semMarkdown
-    );
-  } catch {
-    // Continua.
+  for (
+    const candidato
+    of candidatos
+  ) {
+    try {
+      return JSON.parse(
+        candidato
+      );
+    } catch {
+      // Continua.
+    }
   }
 
   const inicio =
-    semMarkdown.indexOf("{");
+    texto.indexOf("{");
 
   const fim =
-    semMarkdown.lastIndexOf("}");
+    texto.lastIndexOf("}");
 
   if (
-    inicio === -1 ||
-    fim === -1 ||
+    inicio < 0 ||
     fim <= inicio
   ) {
     throw new Error(
-      "A IA não retornou um objeto JSON reconhecível."
+      "JSON não reconhecido na resposta da IA."
     );
   }
 
-  const trechoJson =
-    semMarkdown.slice(
+  return JSON.parse(
+    texto.slice(
       inicio,
       fim + 1
-    );
-
-  try {
-    return JSON.parse(
-      trechoJson
-    );
-  } catch (error) {
-    throw new Error(
-      `A IA retornou JSON inválido: ${obterMensagemErro(
-        error
-      )}`
-    );
-  }
+    )
+  );
 }
-
-/* =========================================================
-   NORMALIZAÇÃO DO RESULTADO
-========================================================= */
 
 function normalizarResultado(
   resultado
 ) {
   if (
     !resultado ||
-    typeof resultado !== "object" ||
+    typeof resultado !==
+      "object" ||
     Array.isArray(resultado)
   ) {
     throw new Error(
@@ -724,14 +664,14 @@ function normalizarResultado(
     );
   }
 
-  const concursoFonte =
+  const concurso =
     resultado.concurso &&
     typeof resultado.concurso ===
       "object"
       ? resultado.concurso
       : {};
 
-  const disciplinasFonte =
+  const origem =
     Array.isArray(
       resultado.disciplinas
     )
@@ -742,16 +682,8 @@ function normalizarResultado(
         ? resultado.materias
         : [];
 
-  if (
-    !disciplinasFonte.length
-  ) {
-    throw new Error(
-      "A IA não identificou disciplinas no edital."
-    );
-  }
-
   const disciplinas =
-    disciplinasFonte
+    origem
       .map(
         (
           item,
@@ -763,21 +695,20 @@ function normalizarResultado(
               "object"
               ? item
               : {
-                  nome: String(
-                    item || ""
-                  ),
+                  nome: item,
                 };
 
-          const nome = String(
-            disciplina.nome ||
-            disciplina.materia ||
-            disciplina.disciplina ||
-            `Disciplina ${
-              indice + 1
-            }`
-          ).trim();
+          const nome =
+            textoSeguro(
+              disciplina.nome ||
+                disciplina.materia ||
+                disciplina.disciplina ||
+                `Disciplina ${
+                  indice + 1
+                }`
+            );
 
-          const topicosFonte =
+          const topicosOrigem =
             Array.isArray(
               disciplina.topicos
             )
@@ -793,42 +724,33 @@ function normalizarResultado(
                   : [];
 
           const topicos =
-            topicosFonte
+            topicosOrigem
               .map(
                 (
-                  itemTopico,
+                  topico,
                   ordem
-                ) => {
-                  const nomeTopico =
-                    typeof itemTopico ===
-                    "string"
-                      ? itemTopico.trim()
-                      : String(
-                          itemTopico?.nome ||
-                          itemTopico?.assunto ||
-                          itemTopico?.topico ||
-                          itemTopico?.conteudo ||
-                          ""
-                        ).trim();
-
-                  if (
-                    !nomeTopico
-                  ) {
-                    return null;
-                  }
-
-                  return {
-                    nome:
-                      nomeTopico,
-                    concluido:
-                      false,
-                    status:
-                      "pendente",
-                    ordem,
-                  };
-                }
+                ) => ({
+                  nome:
+                    textoSeguro(
+                      typeof topico ===
+                        "string"
+                        ? topico
+                        : topico?.nome ||
+                            topico?.assunto ||
+                            topico?.topico ||
+                            topico?.conteudo
+                    ),
+                  concluido:
+                    false,
+                  status:
+                    "pendente",
+                  ordem,
+                })
               )
-              .filter(Boolean);
+              .filter(
+                (topico) =>
+                  topico.nome
+              );
 
           return {
             nome,
@@ -849,168 +771,75 @@ function normalizarResultado(
         (disciplina) =>
           disciplina.nome &&
           disciplina.topicos
-            .length > 0
+            .length
       );
 
-  if (!disciplinas.length) {
+  if (
+    !disciplinas.length
+  ) {
     throw new Error(
-      "A IA identificou disciplinas, mas não retornou tópicos válidos."
+      "A IA não retornou disciplinas com tópicos válidos."
     );
   }
 
   return {
     concurso: {
-      nome: String(
-        concursoFonte.nome ||
-        concursoFonte.titulo ||
-        resultado.nome_concurso ||
-        ""
-      ).trim(),
+      nome:
+        textoSeguro(
+          concurso.nome ||
+            concurso.titulo ||
+            resultado.nome_concurso
+        ),
 
-      orgao: String(
-        concursoFonte.orgao ||
-        concursoFonte["órgão"] ||
-        resultado.orgao ||
-        ""
-      ).trim(),
+      orgao:
+        textoSeguro(
+          concurso.orgao ||
+            concurso["órgão"] ||
+            resultado.orgao
+        ),
 
-      cargo: String(
-        concursoFonte.cargo ||
-        resultado.cargo ||
-        ""
-      ).trim(),
+      cargo:
+        textoSeguro(
+          concurso.cargo ||
+            resultado.cargo
+        ),
 
-      banca: String(
-        concursoFonte.banca ||
-        resultado.banca ||
-        ""
-      ).trim(),
+      banca:
+        textoSeguro(
+          concurso.banca ||
+            resultado.banca
+        ),
 
       data_prova:
         normalizarData(
-          concursoFonte.data_prova ||
-          concursoFonte.prova ||
-          resultado.data_prova ||
-          ""
+          concurso.data_prova ||
+            concurso.prova ||
+            resultado.data_prova
         ),
     },
 
     disciplinas,
 
-    estrategia: String(
-      resultado.estrategia ||
-      concursoFonte.estrategia ||
-      ""
-    ).trim(),
+    estrategia:
+      textoSeguro(
+        resultado.estrategia ||
+          concurso.estrategia
+      ),
   };
 }
-
-function normalizarPrioridade(
-  valor
-) {
-  const prioridade =
-    removerAcentos(
-      String(
-        valor || "media"
-      )
-    )
-      .toLowerCase()
-      .trim();
-
-  if (
-    prioridade === "alta"
-  ) {
-    return "alta";
-  }
-
-  if (
-    prioridade === "baixa"
-  ) {
-    return "baixa";
-  }
-
-  return "media";
-}
-
-function normalizarPeso(valor) {
-  const peso = Number(valor);
-
-  if (
-    !Number.isFinite(peso) ||
-    peso < 1
-  ) {
-    return 1;
-  }
-
-  return Math.max(
-    1,
-    Math.round(peso)
-  );
-}
-
-function normalizarData(valor) {
-  const texto = String(
-    valor || ""
-  ).trim();
-
-  if (!texto) {
-    return "";
-  }
-
-  if (
-    /^\d{4}-\d{2}-\d{2}$/.test(
-      texto
-    )
-  ) {
-    return texto;
-  }
-
-  if (
-    /^\d{2}\/\d{2}\/\d{4}$/.test(
-      texto
-    )
-  ) {
-    const [
-      dia,
-      mes,
-      ano,
-    ] = texto.split("/");
-
-    return `${ano}-${mes}-${dia}`;
-  }
-
-  return "";
-}
-
-function removerAcentos(valor) {
-  return String(
-    valor || ""
-  )
-    .normalize("NFD")
-    .replace(
-      /[\u0300-\u036f]/g,
-      ""
-    );
-}
-
-/* =========================================================
-   SALVAMENTO NO SUPABASE
-========================================================= */
 
 async function salvarEdital(
   request,
   env
 ) {
   try {
-    validarVariaveisSupabase(
-      env
-    );
+    validarSupabase(env);
 
     const contentType =
-      String(
+      textoSeguro(
         request.headers.get(
           "content-type"
-        ) || ""
+        )
       ).toLowerCase();
 
     if (
@@ -1031,29 +860,25 @@ async function salvarEdital(
     const body =
       await request.json();
 
-    const dadosBrutos =
-      body.resultado ||
-      body.analise ||
-      body.resposta ||
-      body;
-
     const dados =
       normalizarResultado(
-        dadosBrutos
+        body.resultado ||
+          body.analise ||
+          body.resposta ||
+          body
       );
 
-    const userId = String(
-      body.user_id ||
-      body.userId ||
-      ""
-    ).trim();
+    const userId =
+      textoSeguro(
+        body.user_id ||
+          body.userId
+      );
 
     const concursoId =
-      String(
+      textoSeguro(
         body.concurso_id ||
-        body.concursoId ||
-        ""
-      ).trim();
+          body.concursoId
+      );
 
     if (!userId) {
       return json(
@@ -1093,7 +918,7 @@ async function salvarEdital(
         {
           ok: false,
           erro:
-            "Concurso não encontrado ou não pertence ao usuário informado.",
+            "Concurso não encontrado para esse usuário.",
         },
         404
       );
@@ -1129,6 +954,7 @@ async function salvarEdital(
           null,
 
         estado: "ativo",
+
         ativo: true,
 
         updated_at:
@@ -1141,9 +967,6 @@ async function salvarEdital(
       }
     );
 
-    /*
-     * Remove a verticalização anterior para evitar duplicação.
-     */
     await excluirVerticalizacaoAnterior(
       env,
       concursoId,
@@ -1154,17 +977,14 @@ async function salvarEdital(
     let totalTopicos = 0;
 
     for (
-      let indice = 0;
-      indice <
-      dados.disciplinas.length;
-      indice++
+      const [
+        indice,
+        disciplina,
+      ]
+      of dados.disciplinas
+        .entries()
     ) {
-      const disciplina =
-        dados.disciplinas[
-          indice
-        ];
-
-      const disciplinaCriada =
+      const criada =
         await supabaseInsert(
           env,
           "disciplinas",
@@ -1189,34 +1009,20 @@ async function salvarEdital(
           }
         );
 
-      if (
-        !disciplinaCriada?.id
-      ) {
-        throw new Error(
-          `O Supabase não retornou o ID da disciplina "${disciplina.nome}".`
-        );
-      }
-
-      totalDisciplinas++;
-
       for (
-        let ordem = 0;
-        ordem <
-        disciplina.topicos
-          .length;
-        ordem++
+        const [
+          ordem,
+          topico,
+        ]
+        of disciplina.topicos
+          .entries()
       ) {
-        const topico =
-          disciplina.topicos[
-            ordem
-          ];
-
         await supabaseInsert(
           env,
           "topicos",
           {
             disciplina_id:
-              disciplinaCriada.id,
+              criada.id,
 
             concurso_id:
               concursoId,
@@ -1239,60 +1045,43 @@ async function salvarEdital(
 
         totalTopicos++;
       }
+
+      totalDisciplinas++;
     }
 
     return json({
       ok: true,
+
       mensagem:
         "Edital verticalizado salvo com sucesso.",
+
       concurso_id:
         concursoId,
+
       disciplinas_salvas:
         totalDisciplinas,
+
       topicos_salvos:
         totalTopicos,
     });
   } catch (error) {
-    const mensagem =
-      obterMensagemErro(error);
-
     console.error(
       "Erro ao salvar edital:",
-      mensagem
+      error
     );
 
     return json(
       {
         ok: false,
-        erro: mensagem,
+        erro:
+          obterMensagemErro(
+            error
+          ),
       },
       500
     );
   }
 }
-
-function validarVariaveisSupabase(
-  env
-) {
-  const url = String(
-    env.SUPABASE_URL || ""
-  ).trim();
-
-  const chave = String(
-    env.SUPABASE_SERVICE_ROLE_KEY ||
-    ""
-  ).trim();
-
-  if (!url || !chave) {
-    throw new Error(
-      "Variáveis do Supabase não configuradas na Cloudflare."
-    );
-  }
-}
-
-/* =========================================================
-   EXCLUSÃO DA VERTICALIZAÇÃO ANTERIOR
-========================================================= */
 
 async function excluirVerticalizacaoAnterior(
   env,
@@ -1346,30 +1135,40 @@ async function excluirVerticalizacaoAnterior(
   );
 }
 
-/* =========================================================
-   FUNÇÕES DO SUPABASE
-========================================================= */
-
 async function supabaseSelect(
   env,
   tabela,
   filtros = {},
   campos = "*"
 ) {
-  const url =
-    montarUrlSupabase(
-      env,
-      tabela,
-      filtros,
-      campos
+  const parametros =
+    montarFiltros(
+      filtros
     );
 
+  parametros.set(
+    "select",
+    campos
+  );
+
+  parametros.set(
+    "limit",
+    "10000"
+  );
+
   const response =
-    await fetch(url, {
-      method: "GET",
-      headers:
-        supabaseHeaders(env),
-    });
+    await fetch(
+      `${obterSupabaseUrl(
+        env
+      )}/rest/v1/${tabela}?${parametros}`,
+      {
+        method: "GET",
+        headers:
+          supabaseHeaders(
+            env
+          ),
+      }
+    );
 
   const data =
     await lerRespostaHttp(
@@ -1411,17 +1210,18 @@ async function supabaseInsert(
   tabela,
   payload
 ) {
-  const baseUrl =
-    obterSupabaseUrl(env);
-
   const response =
     await fetch(
-      `${baseUrl}/rest/v1/${tabela}`,
+      `${obterSupabaseUrl(
+        env
+      )}/rest/v1/${tabela}`,
       {
         method: "POST",
 
         headers: {
-          ...supabaseHeaders(env),
+          ...supabaseHeaders(
+            env
+          ),
 
           Prefer:
             "return=representation",
@@ -1449,7 +1249,7 @@ async function supabaseInsert(
 
   if (
     !Array.isArray(data) ||
-    !data.length
+    !data[0]
   ) {
     throw new Error(
       `O Supabase não retornou o registro criado em ${tabela}.`
@@ -1465,22 +1265,20 @@ async function supabaseUpdate(
   payload,
   filtros
 ) {
-  const baseUrl =
-    obterSupabaseUrl(env);
-
-  const parametros =
-    montarFiltrosSupabase(
-      filtros
-    );
-
   const response =
     await fetch(
-      `${baseUrl}/rest/v1/${tabela}?${parametros.toString()}`,
+      `${obterSupabaseUrl(
+        env
+      )}/rest/v1/${tabela}?${montarFiltros(
+        filtros
+      )}`,
       {
         method: "PATCH",
 
         headers: {
-          ...supabaseHeaders(env),
+          ...supabaseHeaders(
+            env
+          ),
 
           Prefer:
             "return=representation",
@@ -1514,22 +1312,20 @@ async function supabaseDelete(
   tabela,
   filtros
 ) {
-  const baseUrl =
-    obterSupabaseUrl(env);
-
-  const parametros =
-    montarFiltrosSupabase(
-      filtros
-    );
-
   const response =
     await fetch(
-      `${baseUrl}/rest/v1/${tabela}?${parametros.toString()}`,
+      `${obterSupabaseUrl(
+        env
+      )}/rest/v1/${tabela}?${montarFiltros(
+        filtros
+      )}`,
       {
         method: "DELETE",
 
         headers: {
-          ...supabaseHeaders(env),
+          ...supabaseHeaders(
+            env
+          ),
 
           Prefer:
             "return=minimal",
@@ -1553,37 +1349,7 @@ async function supabaseDelete(
   return data;
 }
 
-function montarUrlSupabase(
-  env,
-  tabela,
-  filtros,
-  campos
-) {
-  const baseUrl =
-    obterSupabaseUrl(env);
-
-  const parametros =
-    montarFiltrosSupabase(
-      filtros
-    );
-
-  parametros.set(
-    "select",
-    campos
-  );
-
-  parametros.set(
-    "limit",
-    "10000"
-  );
-
-  return (
-    `${baseUrl}/rest/v1/${tabela}` +
-    `?${parametros.toString()}`
-  );
-}
-
-function montarFiltrosSupabase(
+function montarFiltros(
   filtros = {}
 ) {
   const parametros =
@@ -1591,7 +1357,9 @@ function montarFiltrosSupabase(
 
   for (
     const [campo, valor]
-    of Object.entries(filtros)
+    of Object.entries(
+      filtros
+    )
   ) {
     if (
       valor !== null &&
@@ -1608,46 +1376,53 @@ function montarFiltrosSupabase(
   return parametros;
 }
 
-function obterSupabaseUrl(env) {
-  return String(
-    env.SUPABASE_URL || ""
-  )
-    .trim()
-    .replace(/\/+$/, "");
+function validarSupabase(env) {
+  if (
+    !textoSeguro(
+      env.SUPABASE_URL
+    ) ||
+    !textoSeguro(
+      env.SUPABASE_SERVICE_ROLE_KEY
+    )
+  ) {
+    throw new Error(
+      "Variáveis do Supabase não configuradas na Cloudflare."
+    );
+  }
 }
 
-/*
- * Esta função aceita os dois formatos de chave:
- *
- * 1. Chave service_role antiga, iniciada normalmente por eyJ.
- * 2. Chave secreta nova, iniciada por sb_secret_.
- *
- * Para JWT service_role, envia apikey e Authorization.
- * Para sb_secret_, envia somente apikey.
- */
-function supabaseHeaders(env) {
-  const chave = String(
-    env.SUPABASE_SERVICE_ROLE_KEY ||
+function obterSupabaseUrl(env) {
+  return textoSeguro(
+    env.SUPABASE_URL
+  ).replace(
+    /\/+$/,
     ""
-  ).trim();
+  );
+}
+
+function supabaseHeaders(env) {
+  const chave =
+    textoSeguro(
+      env.SUPABASE_SERVICE_ROLE_KEY
+    );
 
   if (!chave) {
     throw new Error(
-      "A variável SUPABASE_SERVICE_ROLE_KEY está vazia."
+      "SUPABASE_SERVICE_ROLE_KEY está vazia."
     );
   }
 
   const headers = {
     apikey: chave,
+
     "Content-Type":
       "application/json",
   };
 
-  const pareceJwt =
+  if (
     chave.split(".").length ===
-    3;
-
-  if (pareceJwt) {
+    3
+  ) {
     headers.Authorization =
       `Bearer ${chave}`;
   }
@@ -1666,38 +1441,100 @@ async function lerRespostaHttp(
   }
 
   try {
-    return JSON.parse(texto);
+    return JSON.parse(
+      texto
+    );
   } catch {
     return texto;
   }
 }
 
-/* =========================================================
-   RESPOSTAS HTTP E ERROS
-========================================================= */
+function normalizarPrioridade(
+  valor
+) {
+  const prioridade =
+    removerAcentos(
+      textoSeguro(
+        valor || "media"
+      )
+    ).toLowerCase();
+
+  return prioridade ===
+    "alta" ||
+    prioridade ===
+      "baixa"
+    ? prioridade
+    : "media";
+}
+
+function normalizarPeso(valor) {
+  const peso =
+    Number(valor);
+
+  return Number.isFinite(
+    peso
+  ) &&
+    peso >= 1
+    ? Math.round(peso)
+    : 1;
+}
+
+function normalizarData(valor) {
+  const texto =
+    textoSeguro(valor);
+
+  if (
+    /^\d{4}-\d{2}-\d{2}$/.test(
+      texto
+    )
+  ) {
+    return texto;
+  }
+
+  if (
+    /^\d{2}\/\d{2}\/\d{4}$/.test(
+      texto
+    )
+  ) {
+    const [
+      dia,
+      mes,
+      ano,
+    ] = texto.split("/");
+
+    return `${ano}-${mes}-${dia}`;
+  }
+
+  return "";
+}
+
+function removerAcentos(valor) {
+  return textoSeguro(
+    valor
+  )
+    .normalize("NFD")
+    .replace(
+      /[\u0300-\u036f]/g,
+      ""
+    );
+}
+
+function textoSeguro(valor) {
+  return valor === null ||
+    valor === undefined
+    ? ""
+    : String(valor).trim();
+}
 
 function obterMensagemErro(
   error
 ) {
-  if (
-    error instanceof Error
-  ) {
-    return error.message;
-  }
-
-  if (
-    error &&
-    typeof error === "object" &&
-    typeof error.message ===
-      "string"
-  ) {
-    return error.message;
-  }
-
-  return String(
-    error ||
-    "Erro desconhecido."
-  );
+  return error instanceof Error
+    ? error.message
+    : textoSeguro(
+        error ||
+          "Erro desconhecido."
+      );
 }
 
 function corsHeaders() {
