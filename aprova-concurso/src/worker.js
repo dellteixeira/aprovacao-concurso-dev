@@ -1,5 +1,117 @@
-const MODELO_IA = "@cf/zai-org/glm-4.7-flash";
+const MODELO_TESTE = "@cf/zai-org/glm-4.7-flash";
+const MODELO_EXTRACAO = "@cf/meta/llama-3.1-8b-instruct-fast";
 const LIMITE_CARACTERES_EDITAL = 60000;
+
+const ESQUEMA_EDITAL = {
+  type: "object",
+  properties: {
+    concurso: {
+      type: "object",
+      properties: {
+        nome: {
+          type: "string",
+        },
+        orgao: {
+          type: "string",
+        },
+        cargo: {
+          type: "string",
+        },
+        banca: {
+          type: "string",
+        },
+        data_prova: {
+          type: "string",
+        },
+      },
+      required: [
+        "nome",
+        "orgao",
+        "cargo",
+        "banca",
+        "data_prova",
+      ],
+    },
+
+    disciplinas: {
+      type: "array",
+      minItems: 1,
+
+      items: {
+        type: "object",
+
+        properties: {
+          nome: {
+            type: "string",
+          },
+
+          prioridade: {
+            type: "string",
+            enum: [
+              "alta",
+              "media",
+              "baixa",
+            ],
+          },
+
+          peso: {
+            type: "integer",
+            minimum: 1,
+          },
+
+          topicos: {
+            type: "array",
+            minItems: 1,
+
+            items: {
+              type: "object",
+
+              properties: {
+                nome: {
+                  type: "string",
+                },
+
+                concluido: {
+                  type: "boolean",
+                },
+
+                status: {
+                  type: "string",
+                  enum: [
+                    "pendente",
+                  ],
+                },
+              },
+
+              required: [
+                "nome",
+                "concluido",
+                "status",
+              ],
+            },
+          },
+        },
+
+        required: [
+          "nome",
+          "prioridade",
+          "peso",
+          "topicos",
+        ],
+      },
+    },
+
+    estrategia: {
+      type: "string",
+    },
+  },
+
+  required: [
+    "concurso",
+    "disciplinas",
+    "estrategia",
+  ],
+};
 
 export default {
   async fetch(request, env) {
@@ -7,10 +119,13 @@ export default {
 
     try {
       if (request.method === "OPTIONS") {
-        return new Response(null, {
-          status: 204,
-          headers: corsHeaders(),
-        });
+        return new Response(
+          null,
+          {
+            status: 204,
+            headers: corsHeaders(),
+          }
+        );
       }
 
       if (
@@ -19,20 +134,40 @@ export default {
       ) {
         return json({
           ok: true,
-          service: "Aprova Concurso DEV",
-          modelo: MODELO_IA,
-          ai: Boolean(env.AI),
-          assets: Boolean(env.ASSETS),
-          supabase: Boolean(
-            env.SUPABASE_URL &&
+
+          service:
+            "Aprova Concurso DEV",
+
+          modelo_teste:
+            MODELO_TESTE,
+
+          modelo_extracao:
+            MODELO_EXTRACAO,
+
+          ai:
+            Boolean(env.AI),
+
+          assets:
+            Boolean(env.ASSETS),
+
+          supabase:
+            Boolean(
+              env.SUPABASE_URL &&
               env.SUPABASE_SERVICE_ROLE_KEY
-          ),
-          debug: {
-            tem_AI: Boolean(env.AI),
-            tem_ASSETS: Boolean(env.ASSETS),
-            tem_SUPABASE_URL: Boolean(
-              env.SUPABASE_URL
             ),
+
+          debug: {
+            tem_AI:
+              Boolean(env.AI),
+
+            tem_ASSETS:
+              Boolean(env.ASSETS),
+
+            tem_SUPABASE_URL:
+              Boolean(
+                env.SUPABASE_URL
+              ),
+
             tem_SUPABASE_SERVICE_ROLE_KEY:
               Boolean(
                 env.SUPABASE_SERVICE_ROLE_KEY
@@ -53,7 +188,10 @@ export default {
           "/api/ai/analisar-edital" &&
         request.method === "POST"
       ) {
-        return analisarEdital(request, env);
+        return analisarEdital(
+          request,
+          env
+        );
       }
 
       if (
@@ -61,28 +199,42 @@ export default {
           "/api/ai/salvar-edital" &&
         request.method === "POST"
       ) {
-        return salvarEdital(request, env);
+        return salvarEdital(
+          request,
+          env
+        );
       }
 
-      if (url.pathname.startsWith("/api/")) {
+      if (
+        url.pathname.startsWith(
+          "/api/"
+        )
+      ) {
         return json(
           {
             ok: false,
-            erro: "Rota da API não encontrada.",
-            path: url.pathname,
+
+            erro:
+              "Rota da API não encontrada.",
+
+            path:
+              url.pathname,
           },
           404
         );
       }
 
       if (env.ASSETS) {
-        return env.ASSETS.fetch(request);
+        return env.ASSETS.fetch(
+          request
+        );
       }
 
       return new Response(
         "Aprova Concurso DEV",
         {
           status: 200,
+
           headers: {
             "Content-Type":
               "text/plain; charset=utf-8",
@@ -98,7 +250,11 @@ export default {
       return json(
         {
           ok: false,
-          erro: obterMensagemErro(error),
+
+          erro:
+            obterMensagemErro(
+              error
+            ),
         },
         500
       );
@@ -106,65 +262,101 @@ export default {
   },
 };
 
-async function testarWorkersAI(env) {
+async function testarWorkersAI(
+  env
+) {
   try {
     if (!env.AI) {
       return json(
         {
           ok: false,
-          etapa: "binding",
-          erro: "Binding AI não encontrado.",
+
+          etapa:
+            "binding",
+
+          erro:
+            "Binding AI não encontrado.",
         },
         500
       );
     }
 
-    const inicio = Date.now();
+    const inicio =
+      Date.now();
 
-    const resultado = await env.AI.run(
-      MODELO_IA,
-      {
-        messages: [
-          {
-            role: "system",
-            content:
-              "Responda somente com a palavra OK. Não explique e não apresente raciocínio.",
-          },
-          {
-            role: "user",
-            content: "Responda OK.",
-          },
-        ],
-        max_completion_tokens: 300,
-        reasoning_effort: "low",
-        temperature: 0,
-      }
-    );
+    const resultado =
+      await env.AI.run(
+        MODELO_TESTE,
+        {
+          messages: [
+            {
+              role:
+                "system",
+
+              content:
+                "Responda somente com a palavra OK. Não explique.",
+            },
+
+            {
+              role:
+                "user",
+
+              content:
+                "Responda OK.",
+            },
+          ],
+
+          max_completion_tokens:
+            500,
+
+          reasoning_effort:
+            "low",
+
+          temperature:
+            0,
+        }
+      );
 
     const escolha =
-      resultado?.choices?.[0] || null;
+      resultado
+        ?.choices?.[0] ||
+      null;
 
     const conteudo =
-      escolha?.message?.content ||
-      resultado?.response ||
-      resultado?.result ||
+      escolha
+        ?.message
+        ?.content ||
+      resultado
+        ?.response ||
+      resultado
+        ?.result ||
       null;
 
     return json({
       ok: true,
-      modelo: MODELO_IA,
+
+      modelo:
+        MODELO_TESTE,
+
       duracao_ms:
-        Date.now() - inicio,
+        Date.now() -
+        inicio,
+
       teste: {
         conteudo,
+
         finish_reason:
-          escolha?.finish_reason ||
+          escolha
+            ?.finish_reason ||
           null,
+
         completion_tokens:
-          resultado?.usage
+          resultado
+            ?.usage
             ?.completion_tokens ||
           null,
       },
+
       resultado_completo:
         resultado,
     });
@@ -177,12 +369,21 @@ async function testarWorkersAI(env) {
     return json(
       {
         ok: false,
-        etapa: "inferencia",
-        modelo: MODELO_IA,
+
+        etapa:
+          "inferencia",
+
+        modelo:
+          MODELO_TESTE,
+
         erro:
-          obterMensagemErro(error),
+          obterMensagemErro(
+            error
+          ),
+
         tipo:
-          error?.name || null,
+          error?.name ||
+          null,
       },
       500
     );
@@ -198,6 +399,7 @@ async function analisarEdital(
       return json(
         {
           ok: false,
+
           erro:
             "Binding Workers AI não encontrado.",
         },
@@ -213,42 +415,47 @@ async function analisarEdital(
     const textoOriginal =
       textoSeguro(
         dados.texto_edital ||
-          dados.textoEdital ||
-          dados.texto ||
-          dados.conteudo
+        dados.textoEdital ||
+        dados.texto ||
+        dados.conteudo
       );
 
     const nomeArquivo =
       textoSeguro(
         dados.nome_arquivo ||
-          dados.nomeArquivo ||
-          dados.filename
+        dados.nomeArquivo ||
+        dados.filename
       );
 
     const tipoArquivo =
       textoSeguro(
         dados.tipo_arquivo ||
-          dados.tipoArquivo ||
-          dados.type
+        dados.tipoArquivo ||
+        dados.type
       );
 
     if (!textoOriginal) {
       return json(
         {
           ok: false,
+
           erro:
-            "Nenhum texto de edital foi recebido.",
+            "Nenhum texto foi extraído do edital. Se o PDF for escaneado, aplique OCR antes da análise.",
         },
         400
       );
     }
 
-    if (textoOriginal.length < 50) {
+    if (
+      textoOriginal.length <
+      100
+    ) {
       return json(
         {
           ok: false,
+
           erro:
-            "O texto extraído é insuficiente para análise.",
+            "O texto extraído possui menos de 100 caracteres e não é suficiente para verticalizar o edital.",
         },
         400
       );
@@ -260,75 +467,171 @@ async function analisarEdital(
         LIMITE_CARACTERES_EDITAL
       );
 
-    const prompt = montarPrompt({
-      textoEdital,
-      nomeArquivo,
-      tipoArquivo,
-    });
+    const prompt =
+      montarPrompt({
+        textoEdital,
+        nomeArquivo,
+        tipoArquivo,
+      });
 
     const respostaBruta =
-      await env.AI.run(
-        MODELO_IA,
-        {
-          messages: [
-            {
-              role: "system",
-              content:
-                "Extraia informações de editais de concursos públicos. Responda somente com JSON válido, sem markdown, comentários ou explicações.",
-            },
-            {
-              role: "user",
-              content: prompt,
-            },
-          ],
-          max_completion_tokens:
-            6000,
-          reasoning_effort: "low",
-          temperature: 0.1,
-        }
+      await executarExtracaoEstruturada(
+        env,
+        prompt
+      );
+
+    const respostaInterpretada =
+      interpretarRespostaDaIa(
+        respostaBruta
       );
 
     const resultado =
       normalizarResultado(
-        interpretarRespostaDaIa(
-          respostaBruta
-        )
+        respostaInterpretada
       );
 
     return json({
       ok: true,
+
       resultado,
-      resposta: resultado,
-      analise: resultado,
+
+      resposta:
+        resultado,
+
+      analise:
+        resultado,
+
       arquivo: {
         nome:
-          nomeArquivo || null,
+          nomeArquivo ||
+          null,
+
         tipo:
-          tipoArquivo || null,
+          tipoArquivo ||
+          null,
+
         caracteres_recebidos:
           textoOriginal.length,
+
         caracteres_analisados:
           textoEdital.length,
+
         texto_cortado:
           textoOriginal.length >
           LIMITE_CARACTERES_EDITAL,
       },
-      modelo: MODELO_IA,
+
+      modelo:
+        MODELO_EXTRACAO,
     });
   } catch (error) {
     console.error(
       "Erro ao analisar edital:",
-      error
+      {
+        erro:
+          obterMensagemErro(
+            error
+          ),
+
+        stack:
+          error?.stack ||
+          null,
+      }
     );
 
     return json(
       {
         ok: false,
+
         erro:
-          obterMensagemErro(error),
-        modelo: MODELO_IA,
+          obterMensagemErro(
+            error
+          ),
+
+        modelo:
+          MODELO_EXTRACAO,
       },
       500
+    );
+  }
+}
+
+async function executarExtracaoEstruturada(
+  env,
+  prompt
+) {
+  try {
+    return await env.AI.run(
+      MODELO_EXTRACAO,
+      {
+        messages: [
+          {
+            role:
+              "system",
+
+            content:
+              "Você extrai conteúdo programático de editais de concursos. Use apenas informações existentes no documento.",
+          },
+
+          {
+            role:
+              "user",
+
+            content:
+              prompt,
+          },
+        ],
+
+        response_format: {
+          type:
+            "json_schema",
+
+          json_schema:
+            ESQUEMA_EDITAL,
+        },
+
+        max_tokens:
+          8000,
+
+        temperature:
+          0,
+      }
+    );
+  } catch (erroJsonMode) {
+    console.warn(
+      "JSON Mode falhou. Executando tentativa de recuperação:",
+      obterMensagemErro(
+        erroJsonMode
+      )
+    );
+
+    return env.AI.run(
+      MODELO_EXTRACAO,
+      {
+        messages: [
+          {
+            role:
+              "system",
+
+            content:
+              "Extraia o conteúdo do edital e retorne exclusivamente JSON válido, sem markdown nem explicações.",
+          },
+
+          {
+            role:
+              "user",
+
+            content:
+              prompt,
+          },
+        ],
+
+        max_tokens:
+          8000,
+
+        temperature:
+          0,
+      }
     );
   }
 }
@@ -353,7 +656,8 @@ async function lerDadosDaRequisicao(
 
     if (
       !body ||
-      typeof body !== "object" ||
+      typeof body !==
+        "object" ||
       Array.isArray(body)
     ) {
       throw new Error(
@@ -382,14 +686,18 @@ async function lerDadosDaRequisicao(
       of formData.entries()
     ) {
       if (
-        typeof valor === "string"
+        typeof valor ===
+        "string"
       ) {
-        dados[chave] = valor;
+        dados[chave] =
+          valor;
       }
     }
 
     const arquivo =
-      formData.get("arquivo");
+      formData.get(
+        "arquivo"
+      );
 
     if (
       arquivo &&
@@ -400,10 +708,12 @@ async function lerDadosDaRequisicao(
         await arquivo.text();
 
       dados.nome_arquivo =
-        arquivo.name || "";
+        arquivo.name ||
+        "";
 
       dados.tipo_arquivo =
-        arquivo.type || "";
+        arquivo.type ||
+        "";
     }
 
     return dados;
@@ -417,6 +727,7 @@ async function lerDadosDaRequisicao(
     return {
       texto_edital:
         await request.text(),
+
       tipo_arquivo:
         "text/plain",
     };
@@ -436,9 +747,15 @@ function montarPrompt({
   tipoArquivo,
 }) {
   return `
-Analise o edital de concurso público abaixo e retorne SOMENTE JSON válido.
+Analise o edital de concurso público abaixo.
 
-Use exatamente esta estrutura:
+Retorne somente JSON válido.
+Não use markdown.
+Não escreva comentários.
+Não escreva explicações.
+Não escreva texto antes ou depois do JSON.
+
+Use esta estrutura:
 
 {
   "concurso": {
@@ -465,29 +782,35 @@ Use exatamente esta estrutura:
   "estrategia": ""
 }
 
-Regras obrigatórias:
+REGRAS:
 
-1. Extraia todas as disciplinas, tópicos e subtópicos do conteúdo programático.
-2. Preserve a terminologia do edital.
-3. Não invente informações.
-4. Use string vazia para dados ausentes.
-5. Use AAAA-MM-DD para a data.
-6. Prioridade deve ser alta, media ou baixa.
-7. Peso deve ser inteiro e no mínimo 1.
-8. Todos os tópicos começam com concluido=false e status="pendente".
-9. Não use markdown, comentários ou texto fora do JSON.
+1. Identifique concurso, órgão, cargo, banca e data da prova.
+2. Extraia todas as disciplinas do conteúdo programático.
+3. Extraia todos os tópicos e subtópicos.
+4. Preserve os nomes e a terminologia do edital.
+5. Não invente informações.
+6. Use string vazia para informações ausentes.
+7. A data deve usar o formato AAAA-MM-DD.
+8. A prioridade deve ser alta, media ou baixa.
+9. O peso deve ser inteiro e no mínimo 1.
+10. Todo tópico deve começar com concluido=false.
+11. Todo tópico deve começar com status="pendente".
+12. Não omita disciplinas existentes no conteúdo programático.
+13. Não misture tópicos de disciplinas diferentes.
 
-Arquivo: ${
-    nomeArquivo ||
-    "não informado"
-  }
+DADOS DO ARQUIVO:
+
+Nome: ${
+  nomeArquivo ||
+  "não informado"
+}
 
 Tipo: ${
-    tipoArquivo ||
-    "não informado"
-  }
+  tipoArquivo ||
+  "não informado"
+}
 
-EDITAL:
+CONTEÚDO DO EDITAL:
 
 ${textoEdital}
 `;
@@ -498,7 +821,7 @@ function interpretarRespostaDaIa(
 ) {
   if (!resposta) {
     throw new Error(
-      "A IA retornou resposta vazia."
+      "A IA retornou uma resposta vazia."
     );
   }
 
@@ -510,15 +833,61 @@ function interpretarRespostaDaIa(
     return resposta;
   }
 
+  if (
+    possuiEstruturaDeEdital(
+      resposta.response
+    )
+  ) {
+    return resposta.response;
+  }
+
+  const escolha =
+    resposta
+      ?.choices?.[0] ||
+    null;
+
+  const parsed =
+    escolha
+      ?.message
+      ?.parsed;
+
+  if (
+    possuiEstruturaDeEdital(
+      parsed
+    )
+  ) {
+    return parsed;
+  }
+
+  const finishReason =
+    escolha
+      ?.finish_reason ||
+    null;
+
+  const conteudo =
+    escolha
+      ?.message
+      ?.content;
+
+  if (
+    finishReason ===
+      "length" &&
+    !conteudo
+  ) {
+    throw new Error(
+      "A IA atingiu o limite de tokens antes de produzir o JSON."
+    );
+  }
+
   const candidatos = [
     resposta.response,
     resposta.result,
-    resposta.result?.response,
+    resposta.result
+      ?.response,
     resposta.text,
     resposta.output_text,
-    resposta.choices?.[0]
-      ?.message?.content,
-    resposta.choices?.[0]?.text,
+    conteudo,
+    escolha?.text,
   ];
 
   for (
@@ -535,14 +904,24 @@ function interpretarRespostaDaIa(
 
     if (
       typeof candidato ===
-      "string"
+        "string" &&
+      candidato.trim()
     ) {
       try {
-        return extrairJson(
-          candidato
-        );
+        const objeto =
+          extrairJson(
+            candidato
+          );
+
+        if (
+          possuiEstruturaDeEdital(
+            objeto
+          )
+        ) {
+          return objeto;
+        }
       } catch {
-        // Continua procurando outro formato.
+        // Continua testando os demais formatos.
       }
     }
   }
@@ -564,32 +943,90 @@ function interpretarRespostaDaIa(
         return item;
       }
 
+      const partes = [
+        item,
+        item?.text,
+        item?.content,
+      ];
+
       for (
-        const candidato
-        of [
-          item,
-          item?.text,
-          item?.content,
-        ]
+        const parte
+        of partes
       ) {
         if (
-          typeof candidato ===
-          "string"
+          typeof parte ===
+            "string" &&
+          parte.trim()
         ) {
           try {
-            return extrairJson(
-              candidato
-            );
+            const objeto =
+              extrairJson(
+                parte
+              );
+
+            if (
+              possuiEstruturaDeEdital(
+                objeto
+              )
+            ) {
+              return objeto;
+            }
           } catch {
-            // Continua procurando outro formato.
+            // Continua.
+          }
+        }
+      }
+
+      if (
+        Array.isArray(
+          item?.content
+        )
+      ) {
+        for (
+          const parte
+          of item.content
+        ) {
+          if (
+            typeof parte?.text ===
+              "string"
+          ) {
+            try {
+              const objeto =
+                extrairJson(
+                  parte.text
+                );
+
+              if (
+                possuiEstruturaDeEdital(
+                  objeto
+                )
+              ) {
+                return objeto;
+              }
+            } catch {
+              // Continua.
+            }
           }
         }
       }
     }
   }
 
+  console.error(
+    "Resposta da IA não reconhecida:",
+    JSON.stringify(
+      resposta
+    ).slice(
+      0,
+      10000
+    )
+  );
+
   throw new Error(
-    "A resposta da IA não contém uma verticalização reconhecível."
+    `A resposta da IA não contém uma verticalização reconhecível. finish_reason: ${
+      finishReason ||
+      "não informado"
+    }.`
   );
 }
 
@@ -598,21 +1035,20 @@ function possuiEstruturaDeEdital(
 ) {
   return Boolean(
     valor &&
-      typeof valor ===
-        "object" &&
-      !Array.isArray(valor) &&
-      (
-        Array.isArray(
-          valor.disciplinas
-        ) ||
-        Array.isArray(
-          valor.materias
-        )
-      )
+    typeof valor ===
+      "object" &&
+    !Array.isArray(valor) &&
+    Array.isArray(
+      valor.disciplinas
+    ) &&
+    valor.disciplinas
+      .length > 0
   );
 }
 
-function extrairJson(valor) {
+function extrairJson(
+  valor
+) {
   if (
     valor &&
     typeof valor ===
@@ -660,10 +1096,14 @@ function extrairJson(valor) {
   }
 
   const inicio =
-    semMarkdown.indexOf("{");
+    semMarkdown.indexOf(
+      "{"
+    );
 
   const fim =
-    semMarkdown.lastIndexOf("}");
+    semMarkdown.lastIndexOf(
+      "}"
+    );
 
   if (
     inicio < 0 ||
@@ -760,15 +1200,22 @@ function normalizarResultado(
                       typeof topico ===
                         "string"
                         ? topico
-                        : topico?.nome ||
-                            topico?.assunto ||
-                            topico?.topico ||
-                            topico?.conteudo
+                        : topico
+                            ?.nome ||
+                          topico
+                            ?.assunto ||
+                          topico
+                            ?.topico ||
+                          topico
+                            ?.conteudo
                     ),
+
                   concluido:
                     false,
+
                   status:
                     "pendente",
+
                   ordem,
                 })
               )
@@ -781,11 +1228,11 @@ function normalizarResultado(
             nome:
               textoSeguro(
                 disciplina.nome ||
-                  disciplina.materia ||
-                  disciplina.disciplina ||
-                  `Disciplina ${
-                    indice + 1
-                  }`
+                disciplina.materia ||
+                disciplina.disciplina ||
+                `Disciplina ${
+                  indice + 1
+                }`
               ),
 
             prioridade:
@@ -825,34 +1272,34 @@ function normalizarResultado(
       nome:
         textoSeguro(
           concurso.nome ||
-            concurso.titulo ||
-            resultado.nome_concurso
+          concurso.titulo ||
+          resultado.nome_concurso
         ),
 
       orgao:
         textoSeguro(
           concurso.orgao ||
-            concurso["órgão"] ||
-            resultado.orgao
+          concurso["órgão"] ||
+          resultado.orgao
         ),
 
       cargo:
         textoSeguro(
           concurso.cargo ||
-            resultado.cargo
+          resultado.cargo
         ),
 
       banca:
         textoSeguro(
           concurso.banca ||
-            resultado.banca
+          resultado.banca
         ),
 
       data_prova:
         normalizarData(
           concurso.data_prova ||
-            concurso.prova ||
-            resultado.data_prova
+          concurso.prova ||
+          resultado.data_prova
         ),
     },
 
@@ -861,7 +1308,7 @@ function normalizarResultado(
     estrategia:
       textoSeguro(
         resultado.estrategia ||
-          concurso.estrategia
+        concurso.estrategia
       ),
   };
 }
@@ -888,6 +1335,7 @@ async function salvarEdital(
       return json(
         {
           ok: false,
+
           erro:
             "A rota salvar-edital aceita somente application/json.",
         },
@@ -901,27 +1349,28 @@ async function salvarEdital(
     const dados =
       normalizarResultado(
         body.resultado ||
-          body.analise ||
-          body.resposta ||
-          body
+        body.analise ||
+        body.resposta ||
+        body
       );
 
     const userId =
       textoSeguro(
         body.user_id ||
-          body.userId
+        body.userId
       );
 
     const concursoId =
       textoSeguro(
         body.concurso_id ||
-          body.concursoId
+        body.concursoId
       );
 
     if (!userId) {
       return json(
         {
           ok: false,
+
           erro:
             "O campo user_id é obrigatório.",
         },
@@ -933,6 +1382,7 @@ async function salvarEdital(
       return json(
         {
           ok: false,
+
           erro:
             "O campo concurso_id é obrigatório.",
         },
@@ -986,6 +1436,12 @@ async function salvarEdital(
         user_id:
           userId,
       }
+    );
+
+    await excluirVerticalizacaoAnterior(
+      env,
+      concursoId,
+      userId
     );
 
     let totalDisciplinas =
@@ -1097,6 +1553,7 @@ async function salvarEdital(
     return json(
       {
         ok: false,
+
         erro:
           obterMensagemErro(
             error
@@ -1105,6 +1562,115 @@ async function salvarEdital(
       500
     );
   }
+}
+
+async function excluirVerticalizacaoAnterior(
+  env,
+  concursoId,
+  userId
+) {
+  const disciplinas =
+    await supabaseSelect(
+      env,
+      "disciplinas",
+      {
+        concurso_id:
+          concursoId,
+
+        user_id:
+          userId,
+      },
+      "id"
+    );
+
+  for (
+    const disciplina
+    of disciplinas
+  ) {
+    await supabaseDelete(
+      env,
+      "topicos",
+      {
+        disciplina_id:
+          disciplina.id,
+
+        concurso_id:
+          concursoId,
+
+        user_id:
+          userId,
+      }
+    );
+  }
+
+  await supabaseDelete(
+    env,
+    "disciplinas",
+    {
+      concurso_id:
+        concursoId,
+
+      user_id:
+        userId,
+    }
+  );
+}
+
+async function supabaseSelect(
+  env,
+  tabela,
+  filtros = {},
+  campos = "*"
+) {
+  const parametros =
+    montarFiltros(
+      filtros
+    );
+
+  parametros.set(
+    "select",
+    campos
+  );
+
+  parametros.set(
+    "limit",
+    "10000"
+  );
+
+  const response =
+    await fetch(
+      `${obterSupabaseUrl(
+        env
+      )}/rest/v1/${tabela}?${parametros.toString()}`,
+      {
+        method:
+          "GET",
+
+        headers:
+          supabaseHeaders(
+            env
+          ),
+      }
+    );
+
+  const data =
+    await lerRespostaHttp(
+      response
+    );
+
+  if (!response.ok) {
+    throw new Error(
+      `Erro ao consultar ${tabela}: ${JSON.stringify(
+        data
+      )}`
+    );
+  }
+
+  return Array.isArray(
+    data
+  )
+    ? data
+    : [];
 }
 
 async function supabaseInsert(
@@ -1151,7 +1717,9 @@ async function supabaseInsert(
   }
 
   if (
-    !Array.isArray(data) ||
+    !Array.isArray(
+      data
+    ) ||
     !data[0]
   ) {
     throw new Error(
@@ -1214,6 +1782,52 @@ async function supabaseUpdate(
   return data;
 }
 
+async function supabaseDelete(
+  env,
+  tabela,
+  filtros
+) {
+  const parametros =
+    montarFiltros(
+      filtros
+    );
+
+  const response =
+    await fetch(
+      `${obterSupabaseUrl(
+        env
+      )}/rest/v1/${tabela}?${parametros.toString()}`,
+      {
+        method:
+          "DELETE",
+
+        headers: {
+          ...supabaseHeaders(
+            env
+          ),
+
+          Prefer:
+            "return=minimal",
+        },
+      }
+    );
+
+  const data =
+    await lerRespostaHttp(
+      response
+    );
+
+  if (!response.ok) {
+    throw new Error(
+      `Erro ao excluir em ${tabela}: ${JSON.stringify(
+        data
+      )}`
+    );
+  }
+
+  return data;
+}
+
 function montarFiltros(
   filtros = {}
 ) {
@@ -1241,7 +1855,9 @@ function montarFiltros(
   return parametros;
 }
 
-function validarSupabase(env) {
+function validarSupabase(
+  env
+) {
   if (
     !textoSeguro(
       env.SUPABASE_URL
@@ -1256,7 +1872,9 @@ function validarSupabase(env) {
   }
 }
 
-function obterSupabaseUrl(env) {
+function obterSupabaseUrl(
+  env
+) {
   return textoSeguro(
     env.SUPABASE_URL
   ).replace(
@@ -1265,7 +1883,9 @@ function obterSupabaseUrl(env) {
   );
 }
 
-function supabaseHeaders(env) {
+function supabaseHeaders(
+  env
+) {
   const chave =
     textoSeguro(
       env.SUPABASE_SERVICE_ROLE_KEY
@@ -1286,8 +1906,9 @@ function supabaseHeaders(env) {
   };
 
   if (
-    chave.split(".").length ===
-    3
+    chave.split(
+      "."
+    ).length === 3
   ) {
     headers.Authorization =
       `Bearer ${chave}`;
@@ -1322,7 +1943,7 @@ function normalizarPrioridade(
     removerAcentos(
       textoSeguro(
         valor ||
-          "media"
+        "media"
       )
     ).toLowerCase();
 
@@ -1334,7 +1955,9 @@ function normalizarPrioridade(
     : "media";
 }
 
-function normalizarPeso(valor) {
+function normalizarPeso(
+  valor
+) {
   const peso =
     Number(valor);
 
@@ -1342,13 +1965,19 @@ function normalizarPeso(valor) {
     peso
   ) &&
     peso >= 1
-    ? Math.round(peso)
+    ? Math.round(
+        peso
+      )
     : 1;
 }
 
-function normalizarData(valor) {
+function normalizarData(
+  valor
+) {
   const texto =
-    textoSeguro(valor);
+    textoSeguro(
+      valor
+    );
 
   if (
     /^\d{4}-\d{2}-\d{2}$/.test(
@@ -1367,7 +1996,10 @@ function normalizarData(valor) {
       dia,
       mes,
       ano,
-    ] = texto.split("/");
+    ] =
+      texto.split(
+        "/"
+      );
 
     return `${ano}-${mes}-${dia}`;
   }
@@ -1375,32 +2007,43 @@ function normalizarData(valor) {
   return "";
 }
 
-function removerAcentos(valor) {
+function removerAcentos(
+  valor
+) {
   return textoSeguro(
     valor
   )
-    .normalize("NFD")
+    .normalize(
+      "NFD"
+    )
     .replace(
       /[\u0300-\u036f]/g,
       ""
     );
 }
 
-function textoSeguro(valor) {
-  return valor === null ||
-    valor === undefined
+function textoSeguro(
+  valor
+) {
+  return valor ===
+      null ||
+    valor ===
+      undefined
     ? ""
-    : String(valor).trim();
+    : String(
+        valor
+      ).trim();
 }
 
 function obterMensagemErro(
   error
 ) {
-  return error instanceof Error
+  return error instanceof
+    Error
     ? error.message
     : textoSeguro(
         error ||
-          "Erro desconhecido."
+        "Erro desconhecido."
       );
 }
 
