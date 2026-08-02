@@ -5539,1897 +5539,22 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
   window.renderDominatedTopicsPanel=render;
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',render,{once:true});else render();
 })();
-<script id="cloudflareAiUploadOverride">
-(() => {
-  'use strict';
-
-  const ACCEPTED_EXTENSIONS = [
-    'txt',
-    'md',
-    'json',
-    'pdf',
-    'docx',
-    'doc'
-  ];
-
-  const API_ANALISAR = '/api/ai/analisar-edital';
-  const API_SALVAR = '/api/ai/salvar-edital';
-
-  /*
-   * O Worker processa no máximo 80.000 caracteres.
-   * Mantemos o mesmo limite no navegador para evitar envio desnecessário.
-   */
-  const MAX_CHARS_TO_AI = 80000;
-
-  let ultimaAnaliseCloudflare = null;
-  let cargoSelecionadoIndex = -1;
-  let metadadosUltimoArquivo = null;
-
-  const notify = message => {
-    if (typeof window.toast === 'function') {
-      window.toast(message);
-    } else {
-      alert(message);
-    }
-  };
-
-  const escapeHtml = value => String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
-
-  const textoSeguro = value => String(value ?? '').trim();
-
-  function showAnalysis(message, options = {}) {
-    const analysis = document.getElementById('analysis');
-
-    if (!analysis) {
-      return;
-    }
-
-    analysis.classList.add('show');
-
-    if (options.html) {
-      analysis.innerHTML = message;
-    } else {
-      analysis.textContent = message;
-    }
-  }
-
-  function getFileExtension(file) {
-    const nome = textoSeguro(file?.name).toLowerCase();
-    const partes = nome.split('.');
-
-    return partes.length > 1
-      ? partes.pop()
-      : '';
-  }
-
-  function obterSupabaseClient() {
-    if (
-      typeof supabaseClient !== 'undefined' &&
-      supabaseClient
-    ) {
-      return supabaseClient;
-    }
-
-    if (window.supabaseClient) {
-      return window.supabaseClient;
-    }
-
-    return null;
-  }
-
-  async function extrairTextoDoArquivo(file) {
-    const extensao = getFileExtension(file);
-
-    if (!ACCEPTED_EXTENSIONS.includes(extensao)) {
-      throw new Error(
-        'Formato não suportado. Envie .pdf, .txt, .docx, .doc, .md ou .json.'
-      );
-    }
-
-    if (
-      extensao === 'txt' ||
-      extensao === 'md' ||
-      extensao === 'json'
-    ) {
-      return (await file.text()).trim();
-    }
-
-    if (extensao === 'pdf') {
-      return extrairTextoPdf(file);
-    }
-
-    if (extensao === 'docx') {
-      return extrairTextoDocx(file);
-    }
-
-    if (extensao === 'doc') {
-      throw new Error(
-        'Arquivos .doc antigos não podem ser lidos com segurança pelo navegador. ' +
-        'Salve o documento como .docx ou PDF e tente novamente.'
-      );
-    }
-
-    throw new Error('Formato não suportado.');
-  }
-
-  async function extrairTextoPdf(file) {
-    if (!window.pdfjsLib) {
-      throw new Error(
-        'A biblioteca PDF.js não foi carregada. Atualize a página e tente novamente.'
-      );
-    }
-
-    const arrayBuffer = await file.arrayBuffer();
-
-    const loadingTask = window.pdfjsLib.getDocument({
-      data: arrayBuffer
-    });
-
-    const pdf = await loadingTask.promise;
-    const paginas = [];
-
-    for (
-      let paginaNumero = 1;
-      paginaNumero <= pdf.numPages;
-      paginaNumero += 1
-    ) {
-      showAnalysis(
-        `⌛ Extraindo texto do PDF: página ${paginaNumero} de ${pdf.numPages}...`
-      );
-
-      const pagina = await pdf.getPage(paginaNumero);
-      const conteudo = await pagina.getTextContent();
-
-      const textoPagina = conteudo.items
-        .map(item => item.str || '')
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-      if (textoPagina) {
-        paginas.push(
-          `--- Página ${paginaNumero} ---\n${textoPagina}`
-        );
-      }
-    }
-
-    const texto = paginas.join('\n\n').trim();
-
-    if (!texto || texto.length < 100) {
-      throw new Error(
-        'Não foi possível extrair texto suficiente do PDF. ' +
-        'O arquivo pode estar escaneado como imagem e precisar de OCR.'
-      );
-    }
-
-    return texto;
-  }
-
-  async function extrairTextoDocx(file) {
-    if (!window.mammoth) {
-      throw new Error(
-        'A biblioteca Mammoth.js não foi carregada. Atualize a página e tente novamente.'
-      );
-    }
-
-    const arrayBuffer = await file.arrayBuffer();
-
-    const resultado = await window.mammoth.extractRawText({
-      arrayBuffer
-    });
-
-    const texto = textoSeguro(resultado.value);
-
-    if (!texto || texto.length < 100) {
-      throw new Error(
-        'Não foi possível extrair texto suficiente do DOCX.'
-      );
-    }
-
-    return texto;
-  }
-
-  function prepararTextoParaIA(texto) {
-    const limpo = String(texto || '')
-      .replace(/\u0000/g, '')
-      .replace(/\r/g, '\n')
-      .replace(/[ \t]+/g, ' ')
-      .replace(/\n[ \t]+/g, '\n')
-      .replace(/\n{4,}/g, '\n\n\n')
-      .trim();
-
-    if (limpo.length <= MAX_CHARS_TO_AI) {
-      return limpo;
-    }
-
-    return (
-      limpo.slice(0, MAX_CHARS_TO_AI) +
-      '\n\n[AVISO: texto truncado automaticamente no navegador.]'
-    );
-  }
-
-  function normalizarResultado(respostaApi) {
-    const candidatos = [
-      respostaApi?.resultado,
-      respostaApi?.resposta,
-      respostaApi?.analise,
-      respostaApi
-    ];
-
-    for (const candidato of candidatos) {
-      if (
-        candidato &&
-        typeof candidato === 'object' &&
-        candidato.concurso &&
-        Array.isArray(candidato.cargos)
-      ) {
-        return normalizarEditalMulticargos(candidato);
-      }
-
-      /*
-       * Compatibilidade temporária com respostas antigas.
-       */
-      if (
-        candidato &&
-        typeof candidato === 'object' &&
-        candidato.concurso &&
-        Array.isArray(candidato.disciplinas)
-      ) {
-        return normalizarEditalMulticargos({
-          concurso: candidato.concurso,
-          cargos: [
-            {
-              codigo: '',
-              nome:
-                candidato.concurso.cargo ||
-                'Cargo não identificado',
-              especialidade: '',
-              nivel: '',
-              requisitos: '',
-              vagas: null,
-              disciplinas: candidato.disciplinas
-            }
-          ],
-          estrategia: candidato.estrategia || ''
-        });
-      }
-    }
-
-    return null;
-  }
-
-  function normalizarEditalMulticargos(dados) {
-    const concurso = dados.concurso || {};
-
-    const cargos = (Array.isArray(dados.cargos)
-      ? dados.cargos
-      : []
-    )
-      .map((cargo, cargoIndex) => {
-        const disciplinas = (
-          Array.isArray(cargo?.disciplinas)
-            ? cargo.disciplinas
-            : []
-        )
-          .map((disciplina, disciplinaIndex) => ({
-            nome:
-              textoSeguro(disciplina?.nome) ||
-              `Disciplina ${disciplinaIndex + 1}`,
-
-            grupo:
-              textoSeguro(disciplina?.grupo) ||
-              'Conteúdo programático',
-
-            prioridade: normalizarPrioridade(
-              disciplina?.prioridade
-            ),
-
-            peso: normalizarPeso(
-              disciplina?.peso
-            ),
-
-            quantidade_questoes:
-              normalizarInteiroOuNull(
-                disciplina?.quantidade_questoes ??
-                disciplina?.numero_questoes
-              ),
-
-            ordem: disciplinaIndex,
-
-            topicos: (
-              Array.isArray(disciplina?.topicos)
-                ? disciplina.topicos
-                : []
-            )
-              .map(topico => ({
-                nome:
-                  typeof topico === 'string'
-                    ? textoSeguro(topico)
-                    : textoSeguro(topico?.nome),
-
-                status:
-                  topico?.status === 'concluido'
-                    ? 'concluido'
-                    : 'pendente',
-
-                concluido:
-                  topico?.status === 'concluido' ||
-                  topico?.concluido === true
-              }))
-              .filter(topico => topico.nome)
-          }))
-          .filter(disciplina =>
-            disciplina.nome &&
-            disciplina.topicos.length
-          );
-
-        return {
-          codigo: textoSeguro(cargo?.codigo),
-
-          nome:
-            textoSeguro(cargo?.nome) ||
-            textoSeguro(cargo?.cargo) ||
-            `Cargo ${cargoIndex + 1}`,
-
-          especialidade:
-            textoSeguro(
-              cargo?.especialidade ||
-              cargo?.area
-            ),
-
-          nivel: textoSeguro(cargo?.nivel),
-
-          requisitos:
-            textoSeguro(cargo?.requisitos),
-
-          vagas:
-            normalizarInteiroOuNull(cargo?.vagas),
-
-          disciplinas
-        };
-      })
-      .filter(cargo => cargo.disciplinas.length);
-
-    if (!cargos.length) {
-      return null;
-    }
-
-    return {
-      concurso: {
-        nome:
-          textoSeguro(concurso.nome) ||
-          'Concurso importado por IA',
-
-        orgao: textoSeguro(concurso.orgao),
-
-        banca: textoSeguro(concurso.banca),
-
-        numero_edital:
-          textoSeguro(
-            concurso.numero_edital ||
-            concurso.numero
-          ),
-
-        data_prova:
-          textoSeguro(
-            concurso.data_prova ||
-            concurso.prova
-          )
-      },
-
-      cargos,
-
-      estrategia:
-        textoSeguro(dados.estrategia)
-    };
-  }
-
-  function normalizarPrioridade(valor) {
-    const prioridade = textoSeguro(valor)
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '');
-
-    if (prioridade.includes('alta')) {
-      return 'alta';
-    }
-
-    if (prioridade.includes('baixa')) {
-      return 'baixa';
-    }
-
-    return 'media';
-  }
-
-  function normalizarPeso(valor) {
-    const numero = Number(valor);
-
-    if (
-      Number.isFinite(numero) &&
-      numero >= 1
-    ) {
-      return Math.max(
-        1,
-        Math.round(numero)
-      );
-    }
-
-    return 1;
-  }
-
-  function normalizarInteiroOuNull(valor) {
-    if (
-      valor === null ||
-      valor === undefined ||
-      valor === ''
-    ) {
-      return null;
-    }
-
-    const numero = Number(valor);
-
-    if (!Number.isFinite(numero)) {
-      return null;
-    }
-
-    return Math.max(
-      0,
-      Math.round(numero)
-    );
-  }
-
-  function montarNomeCargo(cargo) {
-    return [
-      textoSeguro(cargo?.nome),
-      textoSeguro(cargo?.especialidade)
-    ]
-      .filter(Boolean)
-      .join(' — ');
-  }
-
-  function contarTopicos(disciplinas) {
-    return (disciplinas || []).reduce(
-      (total, disciplina) =>
-        total +
-        (
-          Array.isArray(disciplina?.topicos)
-            ? disciplina.topicos.length
-            : 0
-        ),
-      0
-    );
-  }
-
-  function criarVerticalizacaoDoCargo(
-    edital,
-    cargo
-  ) {
-    return {
-      concurso: {
-        nome:
-          edital.concurso?.nome ||
-          'Concurso importado por IA',
-
-        orgao:
-          edital.concurso?.orgao ||
-          '',
-
-        cargo:
-          montarNomeCargo(cargo),
-
-        banca:
-          edital.concurso?.banca ||
-          '',
-
-        numero_edital:
-          edital.concurso?.numero_edital ||
-          '',
-
-        data_prova:
-          edital.concurso?.data_prova ||
-          '',
-
-        prova:
-          edital.concurso?.data_prova ||
-          ''
-      },
-
-      cargo_detalhes: {
-        codigo: cargo.codigo || '',
-        nome: cargo.nome || '',
-        especialidade: cargo.especialidade || '',
-        nivel: cargo.nivel || '',
-        requisitos: cargo.requisitos || '',
-        vagas: cargo.vagas ?? null
-      },
-
-      disciplinas: cargo.disciplinas.map(
-        (disciplina, indice) => ({
-          nome: disciplina.nome,
-
-          grupo:
-            disciplina.grupo ||
-            'Conteúdo programático',
-
-          prioridade:
-            normalizarPrioridade(
-              disciplina.prioridade
-            ),
-
-          peso:
-            normalizarPeso(
-              disciplina.peso
-            ),
-
-          quantidade_questoes:
-            normalizarInteiroOuNull(
-              disciplina.quantidade_questoes
-            ),
-
-          ordem: indice,
-
-          topicos: disciplina.topicos.map(
-            topico => ({
-              nome: topico.nome,
-
-              status:
-                topico.status === 'concluido'
-                  ? 'concluido'
-                  : 'pendente',
-
-              concluido:
-                topico.status === 'concluido' ||
-                topico.concluido === true
-            })
-          )
-        })
-      ),
-
-      estrategia:
-        edital.estrategia ||
-        (
-          'Priorize disciplinas específicas e de maior peso, ' +
-          'intercalando teoria, questões e revisões.'
-        )
-    };
-  }
-
-  function obterCargoSelecionado() {
-    if (
-      !ultimaAnaliseCloudflare ||
-      !Array.isArray(ultimaAnaliseCloudflare.cargos)
-    ) {
-      return null;
-    }
-
-    if (
-      cargoSelecionadoIndex < 0 ||
-      cargoSelecionadoIndex >=
-        ultimaAnaliseCloudflare.cargos.length
-    ) {
-      return null;
-    }
-
-    return ultimaAnaliseCloudflare
-      .cargos[cargoSelecionadoIndex];
-  }
-
-  function renderizarSeletorDeCargos() {
-    if (!ultimaAnaliseCloudflare) {
-      return;
-    }
-
-    const edital = ultimaAnaliseCloudflare;
-    const concurso = edital.concurso || {};
-    const cargos = edital.cargos || {};
-
-    const totalCargos = edital.cargos.length;
-
-    const totalDisciplinas = edital.cargos.reduce(
-      (total, cargo) =>
-        total + cargo.disciplinas.length,
-      0
-    );
-
-    const totalTopicos = edital.cargos.reduce(
-      (total, cargo) =>
-        total + contarTopicos(cargo.disciplinas),
-      0
-    );
-
-    const cardsCargos = edital.cargos
-      .map((cargo, indice) => {
-        const nomeCompleto = montarNomeCargo(cargo);
-        const topicos = contarTopicos(
-          cargo.disciplinas
-        );
-
-        const selecionado =
-          indice === cargoSelecionadoIndex;
-
-        return `
-          <label
-            style="
-              display:block;
-              border:2px solid ${
-                selecionado
-                  ? 'var(--blue)'
-                  : 'var(--line)'
-              };
-              border-radius:12px;
-              padding:13px;
-              cursor:pointer;
-              background:${
-                selecionado
-                  ? 'var(--soft)'
-                  : 'transparent'
-              };
-            "
-          >
-            <div
-              style="
-                display:grid;
-                grid-template-columns:22px 1fr;
-                gap:10px;
-                align-items:start;
-              "
-            >
-              <input
-                type="radio"
-                name="cargoCloudflareAi"
-                value="${indice}"
-                ${selecionado ? 'checked' : ''}
-                style="
-                  margin-top:3px;
-                  accent-color:var(--blue);
-                "
-              />
-
-              <div>
-                <strong
-                  style="
-                    display:block;
-                    font-size:13px;
-                    color:var(--ink);
-                  "
-                >
-                  ${escapeHtml(nomeCompleto)}
-                </strong>
-
-                <div
-                  style="
-                    margin-top:5px;
-                    color:var(--muted);
-                    font-size:11px;
-                    line-height:1.5;
-                  "
-                >
-                  ${cargo.codigo
-                    ? `Código: ${escapeHtml(cargo.codigo)} · `
-                    : ''
-                  }
-
-                  ${cargo.nivel
-                    ? `Nível: ${escapeHtml(cargo.nivel)} · `
-                    : ''
-                  }
-
-                  ${cargo.vagas !== null
-                    ? `Vagas: ${cargo.vagas} · `
-                    : ''
-                  }
-
-                  ${cargo.disciplinas.length}
-                  disciplina(s) ·
-                  ${topicos} tópico(s)
-                </div>
-
-                ${cargo.requisitos
-                  ? `
-                    <div
-                      style="
-                        margin-top:5px;
-                        color:var(--muted);
-                        font-size:10px;
-                        line-height:1.45;
-                      "
-                    >
-                      Requisitos:
-                      ${escapeHtml(cargo.requisitos)}
-                    </div>
-                  `
-                  : ''
-                }
-              </div>
-            </div>
-          </label>
-        `;
-      })
-      .join('');
-
-    const jsonFormatado = JSON.stringify(
-      edital,
-      null,
-      2
-    );
-
-    showAnalysis(`
-      <div>
-        <strong>
-          ✓ Edital analisado com IA da Cloudflare
-        </strong>
-      </div>
-
-      <div
-        style="
-          margin-top:8px;
-          line-height:1.55;
-        "
-      >
-        <div>
-          Arquivo:
-          ${escapeHtml(
-            metadadosUltimoArquivo?.nome_arquivo ||
-            'não informado'
-          )}
-        </div>
-
-        <div>
-          Concurso:
-          ${escapeHtml(
-            concurso.nome ||
-            'não identificado'
-          )}
-        </div>
-
-        <div>
-          Órgão:
-          ${escapeHtml(
-            concurso.orgao ||
-            'não identificado'
-          )}
-        </div>
-
-        <div>
-          Banca:
-          ${escapeHtml(
-            concurso.banca ||
-            'não identificada'
-          )}
-        </div>
-
-        <div>
-          Cargos:
-          ${totalCargos} ·
-          Disciplinas vinculadas:
-          ${totalDisciplinas} ·
-          Tópicos:
-          ${totalTopicos}
-        </div>
-      </div>
-
-      <div
-        style="
-          margin-top:16px;
-          font-weight:850;
-          color:var(--ink);
-        "
-      >
-        Selecione o cargo para montar sua grade:
-      </div>
-
-      <div
-        id="cloudflareCargoList"
-        style="
-          display:grid;
-          gap:9px;
-          margin-top:10px;
-          max-height:430px;
-          overflow:auto;
-          padding-right:4px;
-        "
-      >
-        ${cardsCargos}
-      </div>
-
-      <div
-        style="
-          display:flex;
-          gap:8px;
-          flex-wrap:wrap;
-          margin-top:14px;
-        "
-      >
-        <button
-          class="btn primary"
-          type="button"
-          id="applyCloudflareCargo"
-          ${cargoSelecionadoIndex < 0
-            ? 'disabled'
-            : ''
-          }
-        >
-          Aplicar cargo ao aplicativo
-        </button>
-
-        <button
-          class="btn"
-          type="button"
-          id="saveCloudflareAiResult"
-          ${cargoSelecionadoIndex < 0
-            ? 'disabled'
-            : ''
-          }
-        >
-          Salvar cargo no Supabase
-        </button>
-
-        <button
-          class="btn"
-          type="button"
-          id="toggleCloudflareJson"
-        >
-          Mostrar JSON completo
-        </button>
-      </div>
-
-      <div
-        id="cloudflareSelectedCargoSummary"
-        style="
-          margin-top:12px;
-        "
-      >
-        ${renderizarResumoCargoSelecionado()}
-      </div>
-
-      <pre
-        id="cloudflareFullJson"
-        style="
-          display:none;
-          white-space:pre-wrap;
-          overflow:auto;
-          max-height:420px;
-          margin-top:12px;
-          background:rgba(255,255,255,.48);
-          border:1px solid var(--line);
-          border-radius:10px;
-          padding:12px;
-        "
-      >${escapeHtml(jsonFormatado)}</pre>
-    `, {
-      html: true
-    });
-
-    document
-      .querySelectorAll(
-        'input[name="cargoCloudflareAi"]'
-      )
-      .forEach(input => {
-        input.addEventListener(
-          'change',
-          event => {
-            cargoSelecionadoIndex =
-              Number(event.target.value);
-
-            renderizarSeletorDeCargos();
-          }
-        );
-      });
-
-    document
-      .getElementById('applyCloudflareCargo')
-      ?.addEventListener(
-        'click',
-        aplicarCargoSelecionadoNoApp
-      );
-
-    document
-      .getElementById('saveCloudflareAiResult')
-      ?.addEventListener(
-        'click',
-        salvarCargoSelecionadoNoSupabase
-      );
-
-    document
-      .getElementById('toggleCloudflareJson')
-      ?.addEventListener(
-        'click',
-        event => {
-          const json = document.getElementById(
-            'cloudflareFullJson'
-          );
-
-          if (!json) {
-            return;
-          }
-
-          const oculto =
-            json.style.display === 'none';
-
-          json.style.display =
-            oculto
-              ? 'block'
-              : 'none';
-
-          event.currentTarget.textContent =
-            oculto
-              ? 'Ocultar JSON completo'
-              : 'Mostrar JSON completo';
-        }
-      );
-  }
-
-  function renderizarResumoCargoSelecionado() {
-    const cargo = obterCargoSelecionado();
-
-    if (!cargo) {
-      return `
-        <div
-          style="
-            border:1px solid var(--line);
-            border-radius:10px;
-            padding:12px;
-            color:var(--muted);
-            font-size:11px;
-          "
-        >
-          Selecione um cargo acima para visualizar
-          suas disciplinas.
-        </div>
-      `;
-    }
-
-    const disciplinas = cargo.disciplinas || [];
-
-    const linhas = disciplinas
-      .map(disciplina => {
-        const quantidadeTopicos =
-          Array.isArray(disciplina.topicos)
-            ? disciplina.topicos.length
-            : 0;
-
-        return `
-          <div
-            style="
-              display:flex;
-              justify-content:space-between;
-              gap:12px;
-              padding:8px 0;
-              border-top:1px solid var(--line);
-            "
-          >
-            <div>
-              <strong
-                style="
-                  font-size:11px;
-                  color:var(--ink);
-                "
-              >
-                ${escapeHtml(disciplina.nome)}
-              </strong>
-
-              <div
-                style="
-                  margin-top:3px;
-                  color:var(--muted);
-                  font-size:10px;
-                "
-              >
-                ${escapeHtml(disciplina.grupo)}
-              </div>
-            </div>
-
-            <div
-              style="
-                color:var(--muted);
-                font-size:10px;
-                white-space:nowrap;
-              "
-            >
-              ${quantidadeTopicos} tópico(s)
-            </div>
-          </div>
-        `;
-      })
-      .join('');
-
-    return `
-      <div
-        style="
-          border:1px solid var(--line);
-          border-radius:10px;
-          padding:12px;
-        "
-      >
-        <strong
-          style="
-            display:block;
-            margin-bottom:8px;
-            color:var(--ink);
-          "
-        >
-          ${escapeHtml(montarNomeCargo(cargo))}
-        </strong>
-
-        ${linhas}
-      </div>
-    `;
-  }
-
-  function aplicarCargoSelecionadoNoApp() {
-    const cargo = obterCargoSelecionado();
-
-    if (!cargo) {
-      notify('Selecione um cargo antes de aplicar.');
-      return null;
-    }
-
-    const verticalizacao = criarVerticalizacaoDoCargo(
-      ultimaAnaliseCloudflare,
-      cargo
-    );
-
-    try {
-      if (
-        typeof window.normalizarVerticalizacao ===
-        'function'
-      ) {
-        window.verticalizacaoImportada =
-          window.normalizarVerticalizacao(
-            verticalizacao
-          );
-      } else {
-        window.verticalizacaoImportada =
-          verticalizacao;
-      }
-    } catch (_) {
-      window.verticalizacaoImportada =
-        verticalizacao;
-    }
-
-    try {
-      verticalizacaoImportada =
-        window.verticalizacaoImportada;
-    } catch (_) {}
-
-    const info =
-      window.verticalizacaoImportada.concurso ||
-      {};
-
-    const disciplinas =
-      window.verticalizacaoImportada.disciplinas ||
-      [];
-
-    const totalTopicos =
-      contarTopicos(disciplinas);
-
-    const concursoAtual = {
-      nome:
-        info.nome ||
-        'Concurso importado por IA',
-
-      orgao:
-        info.orgao ||
-        '',
-
-      cargo:
-        info.cargo ||
-        montarNomeCargo(cargo),
-
-      banca:
-        info.banca ||
-        '',
-
-      prova:
-        info.prova ||
-        info.data_prova ||
-        '',
-
-      materias:
-        disciplinas
-          .map(disciplina => disciplina.nome)
-          .filter(Boolean)
-          .join(', '),
-
-      topicos:
-        totalTopicos
-    };
-
-    try {
-      window.concursoEditavel =
-        concursoAtual;
-
-      concursoEditavel =
-        concursoAtual;
-    } catch (_) {
-      window.concursoEditavel =
-        concursoAtual;
-    }
-
-    try {
-      localStorage.setItem(
-        'aprovaConcurso',
-        JSON.stringify(concursoAtual)
-      );
-
-      localStorage.setItem(
-        'aprovaVerticalizacao',
-        JSON.stringify(
-          window.verticalizacaoImportada
-        )
-      );
-
-      localStorage.setItem(
-        'aprovaUltimoEditalMulticargos',
-        JSON.stringify(
-          ultimaAnaliseCloudflare
-        )
-      );
-
-      localStorage.setItem(
-        'aprovaCargoSelecionadoIndex',
-        String(cargoSelecionadoIndex)
-      );
-    } catch (_) {}
-
-    try {
-      window
-        .ordenarDisciplinasPorPrioridade
-        ?.();
-    } catch (_) {}
-
-    try {
-      window.salvarVerticalizacao?.();
-    } catch (_) {}
-
-    try {
-      window.renderIndicadoresDoConcurso?.();
-    } catch (_) {}
-
-    try {
-      window.renderConcurso?.();
-    } catch (_) {}
-
-    try {
-      window.renderPlano?.();
-    } catch (_) {}
-
-    try {
-      window.renderTopicosImportados?.();
-    } catch (_) {}
-
-    try {
-      window.atualizarMateriasDisponiveis?.();
-    } catch (_) {}
-
-    try {
-      window.renderFontesEdital?.();
-    } catch (_) {}
-
-    try {
-      window.gerarPlanoAdaptativo?.();
-    } catch (_) {}
-
-    window.dispatchEvent(
-      new CustomEvent(
-        'aprova:topics-changed',
-        {
-          detail: {
-            source:
-              'cloudflare-ai-cargo-selected',
-
-            cargo:
-              montarNomeCargo(cargo)
-          }
-        }
-      )
-    );
-
-    document.dispatchEvent(
-      new CustomEvent('aprova:render')
-    );
-
-    notify(
-      `Cargo aplicado: ${montarNomeCargo(cargo)}`
-    );
-
-    return verticalizacao;
-  }
-
-  async function localizarConcursoAtivoId(
-    client,
-    user
-  ) {
-    const chavesIdAtivo = [
-      'aprovaConcursoAtivoId',
-      'aprovaActiveContestId',
-      'activeContestId',
-      'aprovaConcursoAtivo',
-      'aprovaContestActiveId'
-    ];
-
-    for (const chave of chavesIdAtivo) {
-      const valor = textoSeguro(
-        localStorage.getItem(chave)
-      );
-
-      if (
-        valor &&
-        /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(
-          valor
-        )
-      ) {
-        return valor;
-      }
-    }
-
-    const chavesListas = [
-      'aprovaConcursos',
-      'aprovaContestRegistry',
-      'aprovaConcursosCadastrados'
-    ];
-
-    for (const chave of chavesListas) {
-      try {
-        const lista = JSON.parse(
-          localStorage.getItem(chave) ||
-          '[]'
-        );
-
-        if (!Array.isArray(lista)) {
-          continue;
-        }
-
-        const ativo = lista.find(item =>
-          item &&
-          (
-            item.ativo === true ||
-            String(item.estado || '')
-              .toLowerCase() === 'ativo'
-          )
-        );
-
-        if (ativo?.id) {
-          return String(ativo.id).trim();
-        }
-      } catch (_) {}
-    }
-
-    const {
-      data: concursos,
-      error
-    } = await client
-      .from('concursos')
-      .select(
-        'id,estado,ativo,created_at,updated_at'
-      )
-      .eq('user_id', user.id)
-      .order(
-        'updated_at',
-        {
-          ascending: false,
-          nullsFirst: false
-        }
-      )
-      .order(
-        'created_at',
-        {
-          ascending: false
-        }
-      );
-
-    if (error) {
-      throw new Error(
-        `Erro ao localizar o concurso ativo: ${error.message}`
-      );
-    }
-
-    const concursoAtivo =
-      (concursos || []).find(item =>
-        item?.ativo === true ||
-        String(item?.estado || '')
-          .toLowerCase() === 'ativo'
-      ) ||
-      (concursos || [])[0];
-
-    return textoSeguro(concursoAtivo?.id);
-  }
-
-  async function salvarCargoSelecionadoNoSupabase() {
-    const cargo = obterCargoSelecionado();
-
-    if (!cargo) {
-      notify('Selecione um cargo antes de salvar.');
-      return;
-    }
-
-    try {
-      const client = obterSupabaseClient();
-
-      if (!client) {
-        throw new Error(
-          'O Supabase não está conectado. Entre em sua conta antes de salvar.'
-        );
-      }
-
-      const {
-        data: authData,
-        error: userError
-      } = await client.auth.getUser();
-
-      if (userError) {
-        throw new Error(userError.message);
-      }
-
-      const user = authData?.user;
-
-      if (!user) {
-        throw new Error(
-          'Nenhum usuário autenticado. Entre em sua conta antes de salvar.'
-        );
-      }
-
-      const concursoAtivoId =
-        await localizarConcursoAtivoId(
-          client,
-          user
-        );
-
-      if (!concursoAtivoId) {
-        throw new Error(
-          'Nenhum concurso ativo foi encontrado. ' +
-          'Cadastre ou ative um concurso antes de salvar o edital.'
-        );
-      }
-
-      const verticalizacaoSelecionada =
-        aplicarCargoSelecionadoNoApp();
-
-      if (!verticalizacaoSelecionada) {
-        return;
-      }
-
-      showAnalysis(
-        `⌛ Salvando o cargo ${montarNomeCargo(cargo)} no Supabase...`
-      );
-
-      const salvarUrl = new URL(
-        API_SALVAR,
-        window.location.origin
-      ).toString();
-
-      let response;
-
-      try {
-        response = await fetch(
-          salvarUrl,
-          {
-            method: 'POST',
-
-            headers: {
-              'Content-Type':
-                'application/json'
-            },
-
-            body: JSON.stringify({
-              resultado:
-                verticalizacaoSelecionada,
-
-              user_id:
-                user.id,
-
-              concurso_id:
-                concursoAtivoId
-            })
-          }
-        );
-      } catch (networkError) {
-        throw new Error(
-          `Não foi possível conectar ao Worker em ${salvarUrl}. ` +
-          `Detalhe: ${
-            networkError?.message ||
-            networkError
-          }`
-        );
-      }
-
-      const textoResposta =
-        await response.text();
-
-      let data = {};
-
-      if (textoResposta) {
-        try {
-          data = JSON.parse(textoResposta);
-        } catch (_) {
-          data = {
-            erro: textoResposta
-          };
-        }
-      }
-
-      if (!response.ok || !data.ok) {
-        throw new Error(
-          data.erro ||
-          (
-            `Erro HTTP ${response.status} ` +
-            'ao salvar no Supabase.'
-          )
-        );
-      }
-
-      showAnalysis(`
-        <div>
-          <strong>
-            ✓ Cargo salvo no Supabase
-          </strong>
-        </div>
-
-        <div style="margin-top:8px">
-          Cargo:
-          ${escapeHtml(montarNomeCargo(cargo))}
-        </div>
-
-        <div>
-          Concurso ID:
-          ${escapeHtml(
-            data.concurso_id ||
-            concursoAtivoId
-          )}
-        </div>
-
-        <div>
-          Disciplinas:
-          ${Number(
-            data.disciplinas_salvas ??
-            cargo.disciplinas.length
-          )}
-        </div>
-
-        <div>
-          Tópicos:
-          ${Number(
-            data.topicos_salvos ??
-            contarTopicos(cargo.disciplinas)
-          )}
-        </div>
-
-        <div
-          style="
-            display:flex;
-            gap:8px;
-            flex-wrap:wrap;
-            margin-top:14px;
-          "
-        >
-          <button
-            class="btn primary"
-            type="button"
-            id="returnCloudflareCargoList"
-          >
-            Voltar à lista de cargos
-          </button>
-        </div>
-      `, {
-        html: true
-      });
-
-      document
-        .getElementById(
-          'returnCloudflareCargoList'
-        )
-        ?.addEventListener(
-          'click',
-          renderizarSeletorDeCargos
-        );
-
-      notify(
-        'Cargo salvo e aplicado ao concurso ativo.'
-      );
-    } catch (error) {
-      console.error(
-        'Erro ao salvar cargo no Supabase:',
-        error
-      );
-
-      showAnalysis(`
-        <div>
-          <strong>
-            Erro ao salvar
-          </strong>
-        </div>
-
-        <div
-          style="
-            margin-top:8px;
-            line-height:1.55;
-          "
-        >
-          ${escapeHtml(
-            error?.message ||
-            'Falha desconhecida no Supabase.'
-          )}
-        </div>
-
-        <div
-          style="
-            display:flex;
-            gap:8px;
-            flex-wrap:wrap;
-            margin-top:14px;
-          "
-        >
-          <button
-            class="btn"
-            type="button"
-            id="returnCloudflareAfterError"
-          >
-            Voltar à seleção de cargos
-          </button>
-        </div>
-      `, {
-        html: true
-      });
-
-      document
-        .getElementById(
-          'returnCloudflareAfterError'
-        )
-        ?.addEventListener(
-          'click',
-          renderizarSeletorDeCargos
-        );
-
-      notify('Falha ao salvar no Supabase.');
-    }
-  }
-
-  async function analisarEditalComCloudflareAI(
-    file
-  ) {
-    try {
-      if (!file) {
-        notify('Selecione um arquivo de edital.');
-        return;
-      }
-
-      const nome =
-        file.name ||
-        'edital';
-
-      const extensao =
-        getFileExtension(file);
-
-      if (
-        !ACCEPTED_EXTENSIONS.includes(
-          extensao
-        )
-      ) {
-        throw new Error(
-          'Formato não suportado. ' +
-          'Envie .pdf, .txt, .docx, .doc, .md ou .json.'
-        );
-      }
-
-      ultimaAnaliseCloudflare = null;
-      cargoSelecionadoIndex = -1;
-
-      metadadosUltimoArquivo = {
-        nome_arquivo: nome,
-        extensao
-      };
-
-      showAnalysis(
-        `⌛ Lendo ${nome}...`
-      );
-
-      const textoExtraido =
-        await extrairTextoDoArquivo(file);
-
-      const textoParaIA =
-        prepararTextoParaIA(textoExtraido);
-
-      if (
-        !textoParaIA ||
-        textoParaIA.length < 100
-      ) {
-        throw new Error(
-          'O arquivo está vazio ou possui texto insuficiente para análise.'
-        );
-      }
-
-      showAnalysis(
-        '⌛ Texto extraído. A IA está identificando cargos, disciplinas e tópicos...'
-      );
-
-      const analisarUrl = new URL(
-        API_ANALISAR,
-        window.location.origin
-      ).toString();
-
-      let response;
-
-      try {
-        response = await fetch(
-          analisarUrl,
-          {
-            method: 'POST',
-
-            headers: {
-              'Content-Type':
-                'application/json'
-            },
-
-            body: JSON.stringify({
-              nome_arquivo: nome,
-
-              tipo_arquivo:
-                file.type ||
-                extensao,
-
-              texto_edital:
-                textoParaIA,
-
-              texto:
-                textoParaIA
-            })
-          }
-        );
-      } catch (networkError) {
-        throw new Error(
-          `Não foi possível conectar ao Worker em ${analisarUrl}. ` +
-          `Detalhe: ${
-            networkError?.message ||
-            networkError
-          }`
-        );
-      }
-
-      const textoResposta =
-        await response.text();
-
-      let data = null;
-
-      if (textoResposta) {
-        try {
-          data = JSON.parse(textoResposta);
-        } catch (_) {
-          throw new Error(
-            `A API retornou uma resposta que não é JSON: ${textoResposta.slice(0, 300)}`
-          );
-        }
-      }
-
-      if (!data) {
-        throw new Error(
-          'A API retornou uma resposta vazia.'
-        );
-      }
-
-      if (!response.ok || !data.ok) {
-        throw new Error(
-          data.erro ||
-          (
-            `A análise falhou com HTTP ${response.status}.`
-          )
-        );
-      }
-
-      const vertical =
-        normalizarResultado(data);
-
-      if (!vertical) {
-        throw new Error(
-          'A IA respondeu, mas não retornou cargos com disciplinas e tópicos válidos.'
-        );
-      }
-
-      ultimaAnaliseCloudflare =
-        vertical;
-
-      /*
-       * Um cargo único pode ser previamente selecionado,
-       * mas ainda exige confirmação do usuário para aplicação.
-       */
-      cargoSelecionadoIndex =
-        vertical.cargos.length === 1
-          ? 0
-          : -1;
-
-      try {
-        localStorage.setItem(
-          'aprovaUltimoEditalMulticargos',
-          JSON.stringify(vertical)
-        );
-      } catch (_) {}
-
-      renderizarSeletorDeCargos();
-
-      notify(
-        `${vertical.cargos.length} cargo(s) identificado(s). Selecione o cargo desejado.`
-      );
-    } catch (error) {
-      console.error(
-        'Erro durante a análise do edital:',
-        error
-      );
-
-      showAnalysis(`
-        <div>
-          <strong>
-            Erro na análise do edital
-          </strong>
-        </div>
-
-        <div
-          style="
-            margin-top:8px;
-            line-height:1.55;
-          "
-        >
-          ${escapeHtml(
-            error?.message ||
-            'Não foi possível analisar o edital.'
-          )}
-        </div>
-      `, {
-        html: true
-      });
-
-      notify('Falha na análise com IA.');
-    }
-  }
-
-  function ativarUploadCloudflareAI() {
-    const antigoBotao =
-      document.getElementById(
-        'newChatGptAnalysis'
-      );
-
-    const antigoInput =
-      document.getElementById(
-        'fileInput'
-      );
-
-    if (
-      !antigoBotao ||
-      !antigoInput
-    ) {
-      return;
-    }
-
-    /*
-     * Clonar remove os listeners antigos que poderiam
-     * disparar o fluxo anterior simultaneamente.
-     */
-    const botao =
-      antigoBotao.cloneNode(true);
-
-    const input =
-      antigoInput.cloneNode(true);
-
-    antigoBotao.replaceWith(botao);
-    antigoInput.replaceWith(input);
-
-    const areaUpload =
-      botao.closest('.upload');
-
-    if (areaUpload) {
-      const titulo =
-        areaUpload.querySelector('h3');
-
-      const descricao =
-        areaUpload.querySelector('p');
-
-      if (titulo) {
-        titulo.textContent =
-          'Analisar edital multicargos com IA';
-      }
-
-      if (descricao) {
-        descricao.textContent =
-          'Envie PDF, TXT, DOCX, MD ou JSON. ' +
-          'Depois da análise, escolha o cargo e suas respectivas disciplinas.';
-      }
-    }
-
-    botao.textContent =
-      'Analisar edital com IA';
-
-    botao.title =
-      'Identificar todos os cargos, disciplinas e tópicos do edital';
-
-    botao.disabled = false;
-    botao.removeAttribute('disabled');
-    botao.removeAttribute('aria-disabled');
-
-    input.accept =
-      '.pdf,.txt,.docx,.doc,.md,.json,' +
-      'application/pdf,text/plain,' +
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document,' +
-      'application/msword,application/json';
-
-    input.hidden = true;
-    input.setAttribute(
-      'aria-hidden',
-      'true'
-    );
-
-    input.addEventListener(
-      'change',
-      async event => {
-        const file =
-          event.target.files &&
-          event.target.files[0];
-
-        if (file) {
-          await analisarEditalComCloudflareAI(
-            file
-          );
-        }
-
-        event.target.value = '';
-      }
-    );
-
-    botao.addEventListener(
-      'click',
-      event => {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        input.click();
-      },
-      true
-    );
-
-    window.enviarEdital =
-      analisarEditalComCloudflareAI;
-
-    window.salvarAnaliseCloudflareNoSupabase =
-      salvarCargoSelecionadoNoSupabase;
-
-    window.aplicarCargoCloudflare =
-      aplicarCargoSelecionadoNoApp;
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener(
-      'DOMContentLoaded',
-      ativarUploadCloudflareAI,
-      {
-        once: true
-      }
-    );
-  } else {
-    ativarUploadCloudflareAI();
-  }
-
-  document.addEventListener(
-    'aprova:edital-atualizado',
-    ativarUploadCloudflareAI
-  );
-})();
 </script>
+
+<script id="cloudflareAiUploadOverride">
 (() => {
   'use strict';
 
   const ACCEPTED_EXTENSIONS = ['txt', 'md', 'json', 'pdf', 'docx', 'doc'];
   const API_ANALISAR = '/api/ai/analisar-edital';
   const API_SALVAR = '/api/ai/salvar-edital';
-  const MAX_CHARS_TO_AI = 95000;
+  const MAX_CHARS_TO_AI = 80000;
 
   let ultimaAnaliseCloudflare = null;
+  let cargoSelecionadoIndex = -1;
+  let metadadosUltimoArquivo = null;
 
-  const notify = message => {
-    if (typeof window.toast === 'function') window.toast(message);
-    else alert(message);
-  };
-
+  const textoSeguro = value => String(value ?? '').trim();
   const escapeHtml = value => String(value ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
@@ -7437,49 +5562,34 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
 
-  const showAnalysis = (message, options = {}) => {
+  const notify = message => {
+    if (typeof window.toast === 'function') window.toast(message);
+    else alert(message);
+  };
+
+  function showAnalysis(message, { html = false } = {}) {
     const analysis = document.getElementById('analysis');
     if (!analysis) return;
     analysis.classList.add('show');
-    if (options.html) analysis.innerHTML = message;
+    if (html) analysis.innerHTML = message;
     else analysis.textContent = message;
-  };
+  }
 
-  const getFileExtension = file => {
-    const nome = (file?.name || '').toLowerCase();
-    const partes = nome.split('.');
-    return partes.length > 1 ? partes.pop() : '';
-  };
+  function getFileExtension(file) {
+    const parts = textoSeguro(file?.name).toLowerCase().split('.');
+    return parts.length > 1 ? parts.pop() : '';
+  }
 
-  async function extrairTextoDoArquivo(file) {
-    const extensao = getFileExtension(file);
-
-    if (!ACCEPTED_EXTENSIONS.includes(extensao)) {
-      throw new Error('Formato não suportado. Envie .pdf, .txt, .docx, .doc, .md ou .json.');
-    }
-
-    if (extensao === 'txt' || extensao === 'md' || extensao === 'json') {
-      return (await file.text()).trim();
-    }
-
-    if (extensao === 'pdf') {
-      return await extrairTextoPdf(file);
-    }
-
-    if (extensao === 'docx') {
-      return await extrairTextoDocx(file);
-    }
-
-    if (extensao === 'doc') {
-      throw new Error('Arquivo .doc antigo não é lido com segurança pelo navegador. Salve como .docx ou .pdf e envie novamente.');
-    }
-
-    throw new Error('Formato não suportado.');
+  function obterSupabaseClient() {
+    try {
+      if (typeof supabaseClient !== 'undefined' && supabaseClient) return supabaseClient;
+    } catch (_) {}
+    return window.supabaseClient || null;
   }
 
   async function extrairTextoPdf(file) {
     if (!window.pdfjsLib) {
-      throw new Error('Biblioteca PDF.js não carregou. Recarregue a página e tente novamente.');
+      throw new Error('A biblioteca PDF.js não foi carregada. Atualize a página e tente novamente.');
     }
 
     const arrayBuffer = await file.arrayBuffer();
@@ -7487,7 +5597,8 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     const pdf = await loadingTask.promise;
     const paginas = [];
 
-    for (let paginaNumero = 1; paginaNumero <= pdf.numPages; paginaNumero++) {
+    for (let paginaNumero = 1; paginaNumero <= pdf.numPages; paginaNumero += 1) {
+      showAnalysis(`⌛ Extraindo texto do PDF: página ${paginaNumero} de ${pdf.numPages}...`);
       const pagina = await pdf.getPage(paginaNumero);
       const conteudo = await pagina.getTextContent();
       const textoPagina = conteudo.items
@@ -7500,428 +5611,524 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     }
 
     const texto = paginas.join('\n\n').trim();
-    if (!texto || texto.length < 50) {
-      throw new Error('Não consegui extrair texto suficiente do PDF. Ele pode estar escaneado como imagem. Converta com OCR ou envie um .txt/.docx.');
+    if (texto.length < 100) {
+      throw new Error('Não foi possível extrair texto suficiente do PDF. O arquivo pode estar escaneado e precisar de OCR.');
     }
-
     return texto;
   }
 
   async function extrairTextoDocx(file) {
     if (!window.mammoth) {
-      throw new Error('Biblioteca Mammoth.js não carregou. Recarregue a página e tente novamente.');
+      throw new Error('A biblioteca Mammoth.js não foi carregada. Atualize a página e tente novamente.');
     }
-
     const arrayBuffer = await file.arrayBuffer();
     const resultado = await window.mammoth.extractRawText({ arrayBuffer });
-    const texto = String(resultado.value || '').trim();
-
-    if (!texto || texto.length < 50) {
-      throw new Error('Não consegui extrair texto suficiente do DOCX. Verifique o arquivo ou envie em PDF/TXT.');
-    }
-
+    const texto = textoSeguro(resultado.value);
+    if (texto.length < 100) throw new Error('Não foi possível extrair texto suficiente do DOCX.');
     return texto;
+  }
+
+  async function extrairTextoDoArquivo(file) {
+    const extensao = getFileExtension(file);
+    if (!ACCEPTED_EXTENSIONS.includes(extensao)) {
+      throw new Error('Formato não suportado. Envie .pdf, .txt, .docx, .doc, .md ou .json.');
+    }
+    if (['txt', 'md', 'json'].includes(extensao)) return (await file.text()).trim();
+    if (extensao === 'pdf') return extrairTextoPdf(file);
+    if (extensao === 'docx') return extrairTextoDocx(file);
+    if (extensao === 'doc') {
+      throw new Error('Arquivos .doc antigos não são lidos com segurança pelo navegador. Salve como .docx ou PDF.');
+    }
+    throw new Error('Formato não suportado.');
   }
 
   function prepararTextoParaIA(texto) {
     const limpo = String(texto || '')
       .replace(/\u0000/g, '')
+      .replace(/\r/g, '\n')
       .replace(/[ \t]+/g, ' ')
+      .replace(/\n[ \t]+/g, '\n')
       .replace(/\n{4,}/g, '\n\n\n')
       .trim();
 
     if (limpo.length <= MAX_CHARS_TO_AI) return limpo;
-
-    return limpo.slice(0, MAX_CHARS_TO_AI) + '\n\n[AVISO: texto truncado automaticamente para respeitar o limite operacional da IA.]';
+    return `${limpo.slice(0, MAX_CHARS_TO_AI)}\n\n[AVISO: texto truncado automaticamente no navegador.]`;
   }
 
-  function normalizarResultado(resultado) {
-    const dados = resultado?.resultado || resultado?.resposta || resultado;
-    if (!dados || typeof dados !== 'object') return null;
-
-    if (dados.concurso && Array.isArray(dados.disciplinas)) return dados;
-
-    if (typeof dados.response === 'string') {
-      try {
-        const inicio = dados.response.indexOf('{');
-        const fim = dados.response.lastIndexOf('}');
-        if (inicio >= 0 && fim > inicio) {
-          const parsed = JSON.parse(dados.response.slice(inicio, fim + 1));
-          if (parsed.concurso && Array.isArray(parsed.disciplinas)) return parsed;
-        }
-      } catch (_) {}
-    }
-
-    return null;
+  function normalizarPrioridade(valor) {
+    const prioridade = textoSeguro(valor)
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+    if (prioridade.includes('alta')) return 'alta';
+    if (prioridade.includes('baixa')) return 'baixa';
+    return 'media';
   }
 
-  function adaptarParaApp(vertical) {
-    const concurso = vertical.concurso || {};
+  function normalizarPeso(valor) {
+    const numero = Number(valor);
+    return Number.isFinite(numero) && numero >= 1 ? Math.max(1, Math.round(numero)) : 1;
+  }
+
+  function normalizarInteiroOuNull(valor) {
+    if (valor === null || valor === undefined || valor === '') return null;
+    const numero = Number(valor);
+    return Number.isFinite(numero) ? Math.max(0, Math.round(numero)) : null;
+  }
+
+  function normalizarEditalMulticargos(dados) {
+    const concurso = dados?.concurso || {};
+    const cargos = (Array.isArray(dados?.cargos) ? dados.cargos : [])
+      .map((cargo, cargoIndex) => {
+        const disciplinas = (Array.isArray(cargo?.disciplinas) ? cargo.disciplinas : [])
+          .map((disciplina, disciplinaIndex) => ({
+            nome: textoSeguro(disciplina?.nome) || `Disciplina ${disciplinaIndex + 1}`,
+            grupo: textoSeguro(disciplina?.grupo) || 'Conteúdo programático',
+            prioridade: normalizarPrioridade(disciplina?.prioridade),
+            peso: normalizarPeso(disciplina?.peso),
+            quantidade_questoes: normalizarInteiroOuNull(
+              disciplina?.quantidade_questoes ?? disciplina?.numero_questoes
+            ),
+            ordem: disciplinaIndex,
+            topicos: (Array.isArray(disciplina?.topicos) ? disciplina.topicos : [])
+              .map(topico => ({
+                nome: typeof topico === 'string' ? textoSeguro(topico) : textoSeguro(topico?.nome),
+                status: topico?.status === 'concluido' ? 'concluido' : 'pendente',
+                concluido: topico?.status === 'concluido' || topico?.concluido === true
+              }))
+              .filter(topico => topico.nome)
+          }))
+          .filter(disciplina => disciplina.nome && disciplina.topicos.length);
+
+        return {
+          codigo: textoSeguro(cargo?.codigo),
+          nome: textoSeguro(cargo?.nome || cargo?.cargo) || `Cargo ${cargoIndex + 1}`,
+          especialidade: textoSeguro(cargo?.especialidade || cargo?.area),
+          nivel: textoSeguro(cargo?.nivel),
+          requisitos: textoSeguro(cargo?.requisitos),
+          vagas: normalizarInteiroOuNull(cargo?.vagas),
+          disciplinas
+        };
+      })
+      .filter(cargo => cargo.disciplinas.length);
+
+    if (!cargos.length) return null;
+
     return {
       concurso: {
-        nome: concurso.nome || 'Concurso importado por IA',
-        orgao: concurso.orgao || '',
-        cargo: concurso.cargo || '',
-        banca: concurso.banca || '',
-        prova: concurso.data_prova || concurso.prova || '',
-        data_prova: concurso.data_prova || concurso.prova || null
+        nome: textoSeguro(concurso.nome) || 'Concurso importado por IA',
+        orgao: textoSeguro(concurso.orgao),
+        banca: textoSeguro(concurso.banca),
+        numero_edital: textoSeguro(concurso.numero_edital || concurso.numero),
+        data_prova: textoSeguro(concurso.data_prova || concurso.prova)
       },
-      estrategia: vertical.estrategia || concurso.estrategia || '',
-      disciplinas: (vertical.disciplinas || []).map((disciplina, indice) => ({
-        nome: disciplina.nome || `Disciplina ${indice + 1}`,
-        prioridade: ['alta', 'media', 'baixa'].includes(String(disciplina.prioridade || '').toLowerCase())
-          ? String(disciplina.prioridade).toLowerCase()
-          : 'media',
-        peso: Number(disciplina.peso || 1),
-        ordem: Number.isFinite(Number(disciplina.ordem)) ? Number(disciplina.ordem) : indice,
-        topicos: (disciplina.topicos || []).map(topico => ({
-          nome: typeof topico === 'string' ? topico : (topico.nome || ''),
-          concluido: Boolean(topico.concluido),
-          status: topico.status || (topico.concluido ? 'concluido' : 'pendente')
-        })).filter(topico => topico.nome)
-      })).filter(disciplina => disciplina.nome)
+      cargos,
+      estrategia: textoSeguro(dados?.estrategia)
     };
   }
 
-  function aplicarVerticalizacaoNoApp(vertical) {
-    const adaptada = adaptarParaApp(vertical);
+  function normalizarResultado(respostaApi) {
+    const candidatos = [
+      respostaApi?.resultado,
+      respostaApi?.resposta,
+      respostaApi?.analise,
+      respostaApi
+    ];
 
-    try {
-      if (typeof window.normalizarVerticalizacao === 'function') {
-        window.verticalizacaoImportada = window.normalizarVerticalizacao(adaptada);
-      } else {
-        window.verticalizacaoImportada = adaptada;
+    for (const candidato of candidatos) {
+      if (candidato?.concurso && Array.isArray(candidato.cargos)) {
+        return normalizarEditalMulticargos(candidato);
       }
+      if (candidato?.concurso && Array.isArray(candidato.disciplinas)) {
+        return normalizarEditalMulticargos({
+          concurso: candidato.concurso,
+          cargos: [{
+            codigo: '',
+            nome: candidato.concurso.cargo || 'Cargo não identificado',
+            especialidade: '',
+            nivel: '',
+            requisitos: '',
+            vagas: null,
+            disciplinas: candidato.disciplinas
+          }],
+          estrategia: candidato.estrategia || ''
+        });
+      }
+    }
+    return null;
+  }
+
+  function montarNomeCargo(cargo) {
+    return [textoSeguro(cargo?.nome), textoSeguro(cargo?.especialidade)]
+      .filter(Boolean)
+      .join(' — ');
+  }
+
+  function contarTopicos(disciplinas) {
+    return (disciplinas || []).reduce(
+      (total, disciplina) => total + (Array.isArray(disciplina?.topicos) ? disciplina.topicos.length : 0),
+      0
+    );
+  }
+
+  function criarVerticalizacaoDoCargo(edital, cargo) {
+    return {
+      concurso: {
+        nome: edital.concurso?.nome || 'Concurso importado por IA',
+        orgao: edital.concurso?.orgao || '',
+        cargo: montarNomeCargo(cargo),
+        banca: edital.concurso?.banca || '',
+        numero_edital: edital.concurso?.numero_edital || '',
+        data_prova: edital.concurso?.data_prova || '',
+        prova: edital.concurso?.data_prova || ''
+      },
+      cargo_detalhes: {
+        codigo: cargo.codigo || '',
+        nome: cargo.nome || '',
+        especialidade: cargo.especialidade || '',
+        nivel: cargo.nivel || '',
+        requisitos: cargo.requisitos || '',
+        vagas: cargo.vagas ?? null
+      },
+      disciplinas: cargo.disciplinas.map((disciplina, indice) => ({
+        nome: disciplina.nome,
+        grupo: disciplina.grupo || 'Conteúdo programático',
+        prioridade: normalizarPrioridade(disciplina.prioridade),
+        peso: normalizarPeso(disciplina.peso),
+        quantidade_questoes: normalizarInteiroOuNull(disciplina.quantidade_questoes),
+        ordem: indice,
+        topicos: disciplina.topicos.map(topico => ({
+          nome: topico.nome,
+          status: topico.status === 'concluido' ? 'concluido' : 'pendente',
+          concluido: topico.status === 'concluido' || topico.concluido === true
+        }))
+      })),
+      estrategia: edital.estrategia || 'Priorize disciplinas específicas e de maior peso, intercalando teoria, questões e revisões.'
+    };
+  }
+
+  function obterCargoSelecionado() {
+    if (!ultimaAnaliseCloudflare || !Array.isArray(ultimaAnaliseCloudflare.cargos)) return null;
+    if (cargoSelecionadoIndex < 0 || cargoSelecionadoIndex >= ultimaAnaliseCloudflare.cargos.length) return null;
+    return ultimaAnaliseCloudflare.cargos[cargoSelecionadoIndex];
+  }
+
+  function renderizarResumoCargoSelecionado() {
+    const cargo = obterCargoSelecionado();
+    if (!cargo) {
+      return '<div style="border:1px solid var(--line);border-radius:10px;padding:12px;color:var(--muted);font-size:11px">Selecione um cargo acima para visualizar suas disciplinas.</div>';
+    }
+
+    const linhas = cargo.disciplinas.map(disciplina => `
+      <div style="display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid var(--line)">
+        <div>
+          <strong style="font-size:11px;color:var(--ink)">${escapeHtml(disciplina.nome)}</strong>
+          <div style="margin-top:3px;color:var(--muted);font-size:10px">${escapeHtml(disciplina.grupo)}</div>
+        </div>
+        <div style="color:var(--muted);font-size:10px;white-space:nowrap">${disciplina.topicos.length} tópico(s)</div>
+      </div>
+    `).join('');
+
+    return `
+      <div style="border:1px solid var(--line);border-radius:10px;padding:12px">
+        <strong style="display:block;margin-bottom:8px;color:var(--ink)">${escapeHtml(montarNomeCargo(cargo))}</strong>
+        ${linhas}
+      </div>
+    `;
+  }
+
+  function renderizarSeletorDeCargos() {
+    if (!ultimaAnaliseCloudflare) return;
+
+    const edital = ultimaAnaliseCloudflare;
+    const concurso = edital.concurso || {};
+    const totalDisciplinas = edital.cargos.reduce((total, cargo) => total + cargo.disciplinas.length, 0);
+    const totalTopicos = edital.cargos.reduce((total, cargo) => total + contarTopicos(cargo.disciplinas), 0);
+    const cardsCargos = edital.cargos.map((cargo, indice) => {
+      const selecionado = indice === cargoSelecionadoIndex;
+      return `
+        <label style="display:block;border:2px solid ${selecionado ? 'var(--blue)' : 'var(--line)'};border-radius:12px;padding:13px;cursor:pointer;background:${selecionado ? 'var(--soft)' : 'transparent'}">
+          <div style="display:grid;grid-template-columns:22px 1fr;gap:10px;align-items:start">
+            <input type="radio" name="cargoCloudflareAi" value="${indice}" ${selecionado ? 'checked' : ''} style="margin-top:3px;accent-color:var(--blue)" />
+            <div>
+              <strong style="display:block;font-size:13px;color:var(--ink)">${escapeHtml(montarNomeCargo(cargo))}</strong>
+              <div style="margin-top:5px;color:var(--muted);font-size:11px;line-height:1.5">
+                ${cargo.codigo ? `Código: ${escapeHtml(cargo.codigo)} · ` : ''}
+                ${cargo.nivel ? `Nível: ${escapeHtml(cargo.nivel)} · ` : ''}
+                ${cargo.vagas !== null ? `Vagas: ${cargo.vagas} · ` : ''}
+                ${cargo.disciplinas.length} disciplina(s) · ${contarTopicos(cargo.disciplinas)} tópico(s)
+              </div>
+              ${cargo.requisitos ? `<div style="margin-top:5px;color:var(--muted);font-size:10px;line-height:1.45">Requisitos: ${escapeHtml(cargo.requisitos)}</div>` : ''}
+            </div>
+          </div>
+        </label>
+      `;
+    }).join('');
+
+    showAnalysis(`
+      <div><strong>✓ Edital analisado com IA da Cloudflare</strong></div>
+      <div style="margin-top:8px;line-height:1.55">
+        <div>Arquivo: ${escapeHtml(metadadosUltimoArquivo?.nome_arquivo || 'não informado')}</div>
+        <div>Concurso: ${escapeHtml(concurso.nome || 'não identificado')}</div>
+        <div>Órgão: ${escapeHtml(concurso.orgao || 'não identificado')}</div>
+        <div>Banca: ${escapeHtml(concurso.banca || 'não identificada')}</div>
+        <div>Cargos: ${edital.cargos.length} · Disciplinas vinculadas: ${totalDisciplinas} · Tópicos: ${totalTopicos}</div>
+      </div>
+      <div style="margin-top:16px;font-weight:850;color:var(--ink)">Selecione o cargo para montar sua grade:</div>
+      <div id="cloudflareCargoList" style="display:grid;gap:9px;margin-top:10px;max-height:430px;overflow:auto;padding-right:4px">${cardsCargos}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+        <button class="btn primary" type="button" id="applyCloudflareCargo" ${cargoSelecionadoIndex < 0 ? 'disabled' : ''}>Aplicar cargo ao aplicativo</button>
+        <button class="btn" type="button" id="saveCloudflareAiResult" ${cargoSelecionadoIndex < 0 ? 'disabled' : ''}>Salvar cargo no Supabase</button>
+        <button class="btn" type="button" id="toggleCloudflareJson">Mostrar JSON completo</button>
+      </div>
+      <div id="cloudflareSelectedCargoSummary" style="margin-top:12px">${renderizarResumoCargoSelecionado()}</div>
+      <pre id="cloudflareFullJson" style="display:none;white-space:pre-wrap;overflow:auto;max-height:420px;margin-top:12px;background:rgba(255,255,255,.48);border:1px solid var(--line);border-radius:10px;padding:12px">${escapeHtml(JSON.stringify(edital, null, 2))}</pre>
+    `, { html: true });
+
+    document.querySelectorAll('input[name="cargoCloudflareAi"]').forEach(input => {
+      input.addEventListener('change', event => {
+        cargoSelecionadoIndex = Number(event.target.value);
+        renderizarSeletorDeCargos();
+      });
+    });
+
+    document.getElementById('applyCloudflareCargo')?.addEventListener('click', aplicarCargoSelecionadoNoApp);
+    document.getElementById('saveCloudflareAiResult')?.addEventListener('click', salvarCargoSelecionadoNoSupabase);
+    document.getElementById('toggleCloudflareJson')?.addEventListener('click', event => {
+      const json = document.getElementById('cloudflareFullJson');
+      if (!json) return;
+      const oculto = json.style.display === 'none';
+      json.style.display = oculto ? 'block' : 'none';
+      event.currentTarget.textContent = oculto ? 'Ocultar JSON completo' : 'Mostrar JSON completo';
+    });
+  }
+
+  function aplicarCargoSelecionadoNoApp() {
+    const cargo = obterCargoSelecionado();
+    if (!cargo) {
+      notify('Selecione um cargo antes de aplicar.');
+      return null;
+    }
+
+    const verticalizacao = criarVerticalizacaoDoCargo(ultimaAnaliseCloudflare, cargo);
+    try {
+      window.verticalizacaoImportada = typeof window.normalizarVerticalizacao === 'function'
+        ? window.normalizarVerticalizacao(verticalizacao)
+        : verticalizacao;
     } catch (_) {
-      window.verticalizacaoImportada = adaptada;
+      window.verticalizacaoImportada = verticalizacao;
     }
 
     try { verticalizacaoImportada = window.verticalizacaoImportada; } catch (_) {}
 
     const info = window.verticalizacaoImportada.concurso || {};
-    const totalTopicos = (window.verticalizacaoImportada.disciplinas || [])
-      .reduce((total, disciplina) => total + (disciplina.topicos || []).length, 0);
-
+    const disciplinas = window.verticalizacaoImportada.disciplinas || [];
     const concursoAtual = {
       nome: info.nome || 'Concurso importado por IA',
       orgao: info.orgao || '',
-      cargo: info.cargo || '',
+      cargo: info.cargo || montarNomeCargo(cargo),
       banca: info.banca || '',
       prova: info.prova || info.data_prova || '',
-      materias: (window.verticalizacaoImportada.disciplinas || []).map(d => d.nome).join(', '),
-      topicos: totalTopicos
+      materias: disciplinas.map(disciplina => disciplina.nome).filter(Boolean).join(', '),
+      topicos: contarTopicos(disciplinas)
     };
 
-    try { window.concursoEditavel = concursoAtual; concursoEditavel = concursoAtual; } catch (_) { window.concursoEditavel = concursoAtual; }
-    try { localStorage.setItem('aprovaConcurso', JSON.stringify(concursoAtual)); } catch (_) {}
-    try { localStorage.setItem('aprovaVerticalizacao', JSON.stringify(window.verticalizacaoImportada)); } catch (_) {}
+    try {
+      window.concursoEditavel = concursoAtual;
+      try { concursoEditavel = concursoAtual; } catch (_) {}
+      localStorage.setItem('aprovaConcurso', JSON.stringify(concursoAtual));
+      localStorage.setItem('aprovaVerticalizacao', JSON.stringify(window.verticalizacaoImportada));
+      localStorage.setItem('aprovaUltimoEditalMulticargos', JSON.stringify(ultimaAnaliseCloudflare));
+      localStorage.setItem('aprovaCargoSelecionadoIndex', String(cargoSelecionadoIndex));
+    } catch (_) {}
 
-    try { if (typeof window.ordenarDisciplinasPorPrioridade === 'function') window.ordenarDisciplinasPorPrioridade(); } catch (_) {}
-    try { if (typeof window.salvarVerticalizacao === 'function') window.salvarVerticalizacao(); } catch (_) {}
-    try { if (typeof window.renderIndicadoresDoConcurso === 'function') window.renderIndicadoresDoConcurso(); } catch (_) {}
-    try { if (typeof window.renderConcurso === 'function') window.renderConcurso(); } catch (_) {}
-    try { if (typeof window.renderPlano === 'function') window.renderPlano(); } catch (_) {}
-    try { if (typeof window.renderTopicosImportados === 'function') window.renderTopicosImportados(); } catch (_) {}
-    try { if (typeof window.atualizarMateriasDisponiveis === 'function') window.atualizarMateriasDisponiveis(); } catch (_) {}
-    try { if (typeof window.renderFontesEdital === 'function') window.renderFontesEdital(); } catch (_) {}
+    [
+      'ordenarDisciplinasPorPrioridade',
+      'salvarVerticalizacao',
+      'renderIndicadoresDoConcurso',
+      'renderConcurso',
+      'renderPlano',
+      'renderTopicosImportados',
+      'atualizarMateriasDisponiveis',
+      'renderFontesEdital',
+      'gerarPlanoAdaptativo'
+    ].forEach(nome => {
+      try { window[nome]?.(); } catch (_) {}
+    });
+
+    window.dispatchEvent(new CustomEvent('aprova:topics-changed', {
+      detail: { source: 'cloudflare-ai-cargo-selected', cargo: montarNomeCargo(cargo) }
+    }));
+    document.dispatchEvent(new CustomEvent('aprova:render'));
+    notify(`Cargo aplicado: ${montarNomeCargo(cargo)}`);
+    return verticalizacao;
   }
 
-  async function salvarAnaliseNoSupabase() {
-    if (!ultimaAnaliseCloudflare) {
-      notify('Ainda não há análise para salvar.');
+  async function localizarConcursoAtivoId(client, user) {
+    const chavesIdAtivo = [
+      'aprovaConcursoAtivoId',
+      'aprovaActiveContestId',
+      'activeContestId',
+      'aprovaConcursoAtivo',
+      'aprovaContestActiveId'
+    ];
+
+    for (const chave of chavesIdAtivo) {
+      const valor = textoSeguro(localStorage.getItem(chave));
+      if (valor && /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(valor)) return valor;
+    }
+
+    const { data: concursos, error } = await client
+      .from('concursos')
+      .select('id,estado,ativo,created_at,updated_at')
+      .eq('user_id', user.id)
+      .order('updated_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false });
+
+    if (error) throw new Error(`Erro ao localizar o concurso ativo: ${error.message}`);
+    const concursoAtivo = (concursos || []).find(item =>
+      item?.ativo === true || String(item?.estado || '').toLowerCase() === 'ativo'
+    ) || (concursos || [])[0];
+    return textoSeguro(concursoAtivo?.id);
+  }
+
+  async function salvarCargoSelecionadoNoSupabase() {
+    const cargo = obterCargoSelecionado();
+    if (!cargo) {
+      notify('Selecione um cargo antes de salvar.');
       return;
     }
 
     try {
-      if (!supabaseClient) {
-        throw new Error('O Supabase não está conectado. Entre na sua conta antes de salvar.');
-      }
+      const client = obterSupabaseClient();
+      if (!client) throw new Error('O Supabase não está conectado. Entre em sua conta antes de salvar.');
 
-      const {
-        data: { user },
-        error: userError
-      } = await supabaseClient.auth.getUser();
+      const { data: authData, error: userError } = await client.auth.getUser();
+      if (userError) throw new Error(userError.message);
+      const user = authData?.user;
+      if (!user) throw new Error('Nenhum usuário autenticado. Entre em sua conta antes de salvar.');
 
-      if (userError) throw userError;
-
-      if (!user) {
-        throw new Error('Nenhum usuário autenticado. Entre na sua conta antes de salvar.');
-      }
-
-      let concursoAtivoId = '';
-
-      /*
-       * Primeiro tenta recuperar o ID utilizado pelo gerenciador local
-       * de concursos, considerando as diferentes versões do aplicativo.
-       */
-      const chavesIdAtivo = [
-        'aprovaConcursoAtivoId',
-        'aprovaActiveContestId',
-        'activeContestId',
-        'aprovaConcursoAtivo',
-        'aprovaContestActiveId'
-      ];
-
-      for (const chave of chavesIdAtivo) {
-        const valor = String(localStorage.getItem(chave) || '').trim();
-        if (valor && /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(valor)) {
-          concursoAtivoId = valor;
-          break;
-        }
-      }
-
-      /*
-       * Procura também nos registros locais de concursos.
-       */
+      const concursoAtivoId = await localizarConcursoAtivoId(client, user);
       if (!concursoAtivoId) {
-        const chavesListas = [
-          'aprovaConcursos',
-          'aprovaContestRegistry',
-          'aprovaConcursosCadastrados'
-        ];
-
-        for (const chave of chavesListas) {
-          try {
-            const lista = JSON.parse(localStorage.getItem(chave) || '[]');
-
-            if (!Array.isArray(lista)) continue;
-
-            const ativo = lista.find(item =>
-              item &&
-              (
-                item.ativo === true ||
-                String(item.estado || '').toLowerCase() === 'ativo' ||
-                String(item.id || '') === String(localStorage.getItem('aprovaConcursoAtivo') || '')
-              )
-            );
-
-            if (ativo?.id) {
-              concursoAtivoId = String(ativo.id).trim();
-              break;
-            }
-          } catch (_) {}
-        }
+        throw new Error('Nenhum concurso ativo foi encontrado. Cadastre ou ative um concurso antes de salvar o edital.');
       }
 
-      /*
-       * Fonte definitiva: consulta os concursos do usuário no Supabase.
-       * Prioriza o registro ativo e, na falta dele, usa o mais recente.
-       */
-      if (!concursoAtivoId) {
-        const { data: concursos, error: concursoError } = await supabaseClient
-          .from('concursos')
-          .select('id,estado,ativo,created_at,updated_at')
-          .eq('user_id', user.id)
-          .order('updated_at', { ascending: false, nullsFirst: false })
-          .order('created_at', { ascending: false });
+      const verticalizacaoSelecionada = aplicarCargoSelecionadoNoApp();
+      if (!verticalizacaoSelecionada) return;
 
-        if (concursoError) throw concursoError;
-
-        const concursoAtivo =
-          (concursos || []).find(item =>
-            item?.ativo === true ||
-            String(item?.estado || '').toLowerCase() === 'ativo'
-          ) ||
-          (concursos || [])[0];
-
-        concursoAtivoId = String(concursoAtivo?.id || '').trim();
-      }
-
-      if (!concursoAtivoId) {
-        throw new Error(
-          'Nenhum concurso ativo foi encontrado. Cadastre ou ative um concurso antes de salvar o edital.'
-        );
-      }
-
-      showAnalysis('⌛ Salvando concurso, disciplinas e tópicos no Supabase DEV...');
-
+      showAnalysis(`⌛ Salvando o cargo ${montarNomeCargo(cargo)} no Supabase...`);
       const salvarUrl = new URL(API_SALVAR, window.location.origin).toString();
       let response;
+
       try {
         response = await fetch(salvarUrl, {
           method: 'POST',
-          headers: {
-            'content-type': 'application/json'
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            resultado: ultimaAnaliseCloudflare,
+            resultado: verticalizacaoSelecionada,
             user_id: user.id,
             concurso_id: concursoAtivoId
           })
         });
       } catch (networkError) {
-        throw new Error(
-          `Não foi possível alcançar o Worker em ${salvarUrl}. ` +
-          `Verifique o deployment e a rota /api/ai/salvar-edital. Detalhe: ${networkError?.message || networkError}`
-        );
+        throw new Error(`Não foi possível conectar ao Worker em ${salvarUrl}. Detalhe: ${networkError?.message || networkError}`);
       }
 
-      const data = await response.json().catch(() => ({}));
-
+      const textoResposta = await response.text();
+      let data = {};
+      if (textoResposta) {
+        try { data = JSON.parse(textoResposta); }
+        catch (_) { data = { erro: textoResposta }; }
+      }
       if (!response.ok || !data.ok) {
-        throw new Error(data.erro || 'Não foi possível salvar no Supabase.');
+        throw new Error(data.erro || `Erro HTTP ${response.status} ao salvar no Supabase.`);
       }
 
-      /*
-       * Aplica imediatamente a verticalização na interface e no
-       * armazenamento local, sem depender de um novo carregamento.
-       */
-      try {
-        window.verticalizacaoImportada = ultimaAnaliseCloudflare;
-        localStorage.setItem(
-          'aprovaVerticalizacao',
-          JSON.stringify(ultimaAnaliseCloudflare)
-        );
-
-        const info = ultimaAnaliseCloudflare.concurso || {};
-        const disciplinas = Array.isArray(ultimaAnaliseCloudflare.disciplinas)
-          ? ultimaAnaliseCloudflare.disciplinas
-          : [];
-        const totalTopicos = disciplinas.reduce(
-          (total, disciplina) => total + (Array.isArray(disciplina.topicos) ? disciplina.topicos.length : 0),
-          0
-        );
-
-        let concursoLocal = {};
-        try {
-          concursoLocal = JSON.parse(localStorage.getItem('aprovaConcurso') || '{}') || {};
-        } catch (_) {}
-
-        concursoLocal = {
-          ...concursoLocal,
-          nome: info.nome || concursoLocal.nome || '',
-          orgao: info.orgao || concursoLocal.orgao || '',
-          cargo: info.cargo || concursoLocal.cargo || '',
-          banca: info.banca || concursoLocal.banca || '',
-          prova: info.data_prova || concursoLocal.prova || '',
-          materias: disciplinas.map(item => item.nome).filter(Boolean).join(', '),
-          topicos: totalTopicos
-        };
-
-        localStorage.setItem('aprovaConcurso', JSON.stringify(concursoLocal));
-
-        try { window.salvarVerticalizacao?.(); } catch (_) {}
-        try { window.renderIndicadoresDoConcurso?.(); } catch (_) {}
-        try { window.renderConcurso?.(); } catch (_) {}
-        try { window.renderTopicosImportados?.(); } catch (_) {}
-        try { window.atualizarMateriasDisponiveis?.(); } catch (_) {}
-        try { window.renderFontesEdital?.(); } catch (_) {}
-        try { window.gerarPlanoAdaptativo?.(); } catch (_) {}
-
-        window.dispatchEvent(
-          new CustomEvent('aprova:topics-changed', {
-            detail: { source: 'cloudflare-ai-save' }
-          })
-        );
-        document.dispatchEvent(new CustomEvent('aprova:render'));
-      } catch (renderError) {
-        console.warn(
-          'Os dados foram salvos, mas a atualização imediata da tela falhou:',
-          renderError
-        );
-      }
-
-      showAnalysis(
-        `✓ Salvo no Supabase DEV.\n` +
-        `Concurso ID: ${data.concurso_id}\n` +
-        `Disciplinas: ${data.disciplinas_salvas}\n` +
-        `Tópicos: ${data.topicos_salvos}`
-      );
-
-      notify('Edital salvo e aplicado ao concurso ativo.');
+      showAnalysis(`
+        <div><strong>✓ Cargo salvo no Supabase</strong></div>
+        <div style="margin-top:8px">Cargo: ${escapeHtml(montarNomeCargo(cargo))}</div>
+        <div>Concurso ID: ${escapeHtml(data.concurso_id || concursoAtivoId)}</div>
+        <div>Disciplinas: ${Number(data.disciplinas_salvas ?? cargo.disciplinas.length)}</div>
+        <div>Tópicos: ${Number(data.topicos_salvos ?? contarTopicos(cargo.disciplinas))}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+          <button class="btn primary" type="button" id="returnCloudflareCargoList">Voltar à lista de cargos</button>
+        </div>
+      `, { html: true });
+      document.getElementById('returnCloudflareCargoList')?.addEventListener('click', renderizarSeletorDeCargos);
+      notify('Cargo salvo e aplicado ao concurso ativo.');
     } catch (error) {
-      console.error('Erro ao salvar a análise no Supabase:', error);
-      showAnalysis(`Erro ao salvar: ${error.message || 'falha no Supabase.'}`);
+      console.error('Erro ao salvar cargo no Supabase:', error);
+      showAnalysis(`
+        <div><strong>Erro ao salvar</strong></div>
+        <div style="margin-top:8px;line-height:1.55">${escapeHtml(error?.message || 'Falha desconhecida no Supabase.')}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+          <button class="btn" type="button" id="returnCloudflareAfterError">Voltar à seleção de cargos</button>
+        </div>
+      `, { html: true });
+      document.getElementById('returnCloudflareAfterError')?.addEventListener('click', renderizarSeletorDeCargos);
       notify('Falha ao salvar no Supabase.');
     }
   }
 
-  function mostrarResultadoFinal(vertical, metadados) {
-    const totalDisciplinas = vertical.disciplinas?.length || 0;
-    const totalTopicos = (vertical.disciplinas || []).reduce((total, disciplina) => total + (disciplina.topicos || []).length, 0);
-    const concurso = vertical.concurso || {};
-    const jsonFormatado = JSON.stringify(vertical, null, 2);
-
-    showAnalysis(`
-      <div><strong>✓ Edital analisado com IA da Cloudflare</strong></div>
-      <div style="margin-top:8px">Arquivo: ${escapeHtml(metadados.nome_arquivo)} · Formato: ${escapeHtml(metadados.extensao.toUpperCase())}</div>
-      <div>Concurso: ${escapeHtml(concurso.nome || 'não identificado')}</div>
-      <div>Disciplinas: ${totalDisciplinas} · Tópicos: ${totalTopicos}</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-        <button class="btn primary" type="button" id="saveCloudflareAiResult">Salvar no Supabase DEV</button>
-        <button class="btn" type="button" id="downloadCloudflareAiJson">Baixar JSON</button>
-      </div>
-      <pre style="white-space:pre-wrap;overflow:auto;max-height:360px;margin-top:12px;background:rgba(255,255,255,.48);border:1px solid var(--line);border-radius:10px;padding:12px">${escapeHtml(jsonFormatado)}</pre>
-    `, { html: true });
-
-    document.getElementById('saveCloudflareAiResult')?.addEventListener('click', salvarAnaliseNoSupabase);
-    document.getElementById('downloadCloudflareAiJson')?.addEventListener('click', () => {
-      const blob = new Blob([jsonFormatado], { type: 'application/json;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'edital-verticalizado-cloudflare-ai.json';
-      link.click();
-      URL.revokeObjectURL(url);
-    });
-  }
-
   async function analisarEditalComCloudflareAI(file) {
     try {
-      if (!file) {
-        notify('Selecione um arquivo de edital.');
-        return;
-      }
-
+      if (!file) return notify('Selecione um arquivo de edital.');
       const nome = file.name || 'edital';
       const extensao = getFileExtension(file);
-
       if (!ACCEPTED_EXTENSIONS.includes(extensao)) {
-        showAnalysis('Formato não suportado. Envie .pdf, .txt, .docx, .doc, .md ou .json.');
-        notify('Formato de arquivo não suportado.');
-        return;
+        throw new Error('Formato não suportado. Envie .pdf, .txt, .docx, .doc, .md ou .json.');
       }
+
+      ultimaAnaliseCloudflare = null;
+      cargoSelecionadoIndex = -1;
+      metadadosUltimoArquivo = { nome_arquivo: nome, extensao };
 
       showAnalysis(`⌛ Lendo ${nome}...`);
       const textoExtraido = await extrairTextoDoArquivo(file);
       const textoParaIA = prepararTextoParaIA(textoExtraido);
+      if (textoParaIA.length < 100) throw new Error('O arquivo está vazio ou possui texto insuficiente para análise.');
 
-      if (!textoParaIA || textoParaIA.length < 50) {
-        showAnalysis('Erro: o arquivo parece estar vazio ou muito curto para análise.');
-        return;
+      showAnalysis('⌛ Texto extraído. A IA está identificando cargos, disciplinas e tópicos...');
+      const analisarUrl = new URL(API_ANALISAR, window.location.origin).toString();
+      let response;
+      try {
+        response = await fetch(analisarUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            nome_arquivo: nome,
+            tipo_arquivo: file.type || extensao,
+            texto_edital: textoParaIA,
+            texto: textoParaIA
+          })
+        });
+      } catch (networkError) {
+        throw new Error(`Não foi possível conectar ao Worker em ${analisarUrl}. Detalhe: ${networkError?.message || networkError}`);
       }
 
-      showAnalysis('⌛ Texto extraído. Enviando para a IA da Cloudflare...');
-
-      const response = await fetch(API_ANALISAR, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          nome_arquivo: nome,
-          tipo_arquivo: file.type || extensao,
-          texto_edital: textoParaIA,
-          texto: textoParaIA
-        })
-      });
-
-      const data = await response.json().catch(() => null);
-      if (!data) throw new Error('A API retornou uma resposta inválida.');
-      if (!response.ok || !data.ok) throw new Error(data.erro || 'A IA não conseguiu analisar o edital.');
+      const textoResposta = await response.text();
+      let data = null;
+      if (textoResposta) {
+        try { data = JSON.parse(textoResposta); }
+        catch (_) { throw new Error(`A API retornou uma resposta que não é JSON: ${textoResposta.slice(0, 300)}`); }
+      }
+      if (!data) throw new Error('A API retornou uma resposta vazia.');
+      if (!response.ok || !data.ok) throw new Error(data.erro || `A análise falhou com HTTP ${response.status}.`);
 
       const vertical = normalizarResultado(data);
-      if (!vertical) {
-        const bruto = data.resposta?.response || data.resposta || data.resultado || data;
-        showAnalysis(typeof bruto === 'string' ? bruto : JSON.stringify(bruto, null, 2));
-        notify('A IA respondeu, mas o JSON não veio no formato esperado.');
-        return;
-      }
+      if (!vertical) throw new Error('A IA respondeu, mas não retornou cargos com disciplinas e tópicos válidos.');
 
       ultimaAnaliseCloudflare = vertical;
-      aplicarVerticalizacaoNoApp(vertical);
-      mostrarResultadoFinal(vertical, { nome_arquivo: nome, extensao });
-      notify('Análise concluída. JSON aplicado ao app.');
+      cargoSelecionadoIndex = vertical.cargos.length === 1 ? 0 : -1;
+      try { localStorage.setItem('aprovaUltimoEditalMulticargos', JSON.stringify(vertical)); } catch (_) {}
+      renderizarSeletorDeCargos();
+      notify(`${vertical.cargos.length} cargo(s) identificado(s). Selecione o cargo desejado.`);
     } catch (error) {
-      showAnalysis(`Erro: ${error.message || 'não foi possível analisar o edital.'}`);
+      console.error('Erro durante a análise do edital:', error);
+      showAnalysis(`
+        <div><strong>Erro na análise do edital</strong></div>
+        <div style="margin-top:8px;line-height:1.55">${escapeHtml(error?.message || 'Não foi possível analisar o edital.')}</div>
+      `, { html: true });
       notify('Falha na análise com IA.');
     }
   }
@@ -7933,7 +6140,6 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
 
     const botao = antigoBotao.cloneNode(true);
     const input = antigoInput.cloneNode(true);
-
     antigoBotao.replaceWith(botao);
     antigoInput.replaceWith(input);
 
@@ -7941,12 +6147,12 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     if (areaUpload) {
       const titulo = areaUpload.querySelector('h3');
       const descricao = areaUpload.querySelector('p');
-      if (titulo) titulo.textContent = 'Analisar edital com IA Cloudflare';
-      if (descricao) descricao.textContent = 'Envie .pdf, .txt, .docx, .doc, .md ou .json. PDFs escaneados precisam de OCR.';
+      if (titulo) titulo.textContent = 'Analisar edital multicargos com IA';
+      if (descricao) descricao.textContent = 'Envie PDF, TXT, DOCX, MD ou JSON. Depois da análise, escolha o cargo e suas respectivas disciplinas.';
     }
 
     botao.textContent = 'Analisar edital com IA';
-    botao.title = 'Enviar .pdf, .txt, .docx, .doc, .md ou .json para análise pela Cloudflare Workers AI';
+    botao.title = 'Identificar todos os cargos, disciplinas e tópicos do edital';
     botao.disabled = false;
     botao.removeAttribute('disabled');
     botao.removeAttribute('aria-disabled');
@@ -7956,7 +6162,7 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     input.setAttribute('aria-hidden', 'true');
 
     input.addEventListener('change', async event => {
-      const file = event.target.files && event.target.files[0];
+      const file = event.target.files?.[0];
       if (file) await analisarEditalComCloudflareAI(file);
       event.target.value = '';
     });
@@ -7968,7 +6174,8 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     }, true);
 
     window.enviarEdital = analisarEditalComCloudflareAI;
-    window.salvarAnaliseCloudflareNoSupabase = salvarAnaliseNoSupabase;
+    window.salvarAnaliseCloudflareNoSupabase = salvarCargoSelecionadoNoSupabase;
+    window.aplicarCargoCloudflare = aplicarCargoSelecionadoNoApp;
   }
 
   if (document.readyState === 'loading') {
