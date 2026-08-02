@@ -5547,8 +5547,14 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
 
   const ACCEPTED_EXTENSIONS = ['txt', 'md', 'json', 'pdf', 'docx', 'doc'];
   const API_ANALISAR = '/api/ai/analisar-edital';
+  const API_METADADOS = '/api/ai/extrair-metadados';
+  const API_BLOCO = '/api/ai/analisar-bloco';
+  const API_FINALIZAR = '/api/ai/finalizar-analise';
   const API_SALVAR = '/api/ai/salvar-edital';
-  const MAX_CHARS_TO_AI = 80000;
+  const MAX_CHARS_TO_AI = 68000;
+  const TAMANHO_BLOCO_CLIENTE = 7600;
+  const SOBREPOSICAO_BLOCO_CLIENTE = 700;
+  const MAXIMO_BLOCOS_CLIENTE = 9;
 
   let ultimaAnaliseCloudflare = null;
 
@@ -5663,6 +5669,91 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     if (limpo.length <= MAX_CHARS_TO_AI) return limpo;
     return `${limpo.slice(0, MAX_CHARS_TO_AI)}\n\n[AVISO: texto truncado automaticamente no navegador.]`;
   }
+
+  function dividirTextoEmBlocosCliente(texto) {
+    const blocos = [];
+    let inicio = 0;
+
+    while (
+      inicio < texto.length &&
+      blocos.length < MAXIMO_BLOCOS_CLIENTE
+    ) {
+      let fim = Math.min(inicio + TAMANHO_BLOCO_CLIENTE, texto.length);
+
+      if (fim < texto.length) {
+        const cortes = [
+          texto.lastIndexOf('\n\n', fim),
+          texto.lastIndexOf('\n', fim),
+          texto.lastIndexOf('. ', fim)
+        ].filter(posicao =>
+          posicao > inicio + TAMANHO_BLOCO_CLIENTE * 0.65
+        );
+
+        if (cortes.length) fim = Math.max(...cortes) + 1;
+      }
+
+      const bloco = texto.slice(inicio, fim).trim();
+      if (bloco) blocos.push(bloco);
+      if (fim >= texto.length) break;
+
+      inicio = Math.max(
+        fim - SOBREPOSICAO_BLOCO_CLIENTE,
+        inicio + 1
+      );
+    }
+
+    return blocos;
+  }
+
+  async function chamarApiJson(url, payload, tentativas = 2) {
+    let ultimoErro = null;
+
+    for (let tentativa = 1; tentativa <= tentativas; tentativa += 1) {
+      try {
+        const response = await fetch(
+          new URL(url, window.location.origin).toString(),
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          }
+        );
+
+        const textoResposta = await response.text();
+        let data = null;
+
+        if (textoResposta) {
+          try {
+            data = JSON.parse(textoResposta);
+          } catch (_) {
+            throw new Error(
+              `A API retornou uma resposta inválida: ${textoResposta.slice(0, 240)}`
+            );
+          }
+        }
+
+        if (!response.ok || !data?.ok) {
+          throw new Error(
+            data?.erro ||
+            `A API respondeu com HTTP ${response.status}.`
+          );
+        }
+
+        return data;
+      } catch (error) {
+        ultimoErro = error;
+
+        if (tentativa < tentativas) {
+          await new Promise(resolve =>
+            setTimeout(resolve, 700 * tentativa)
+          );
+        }
+      }
+    }
+
+    throw ultimoErro || new Error('Falha desconhecida ao acessar o Worker.');
+  }
+
 
   function normalizarPrioridade(valor) {
     const prioridade = textoSeguro(valor)
@@ -6200,10 +6291,14 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
   async function analisarEditalComCloudflareAI(file) {
     try {
       if (!file) return notify('Selecione um arquivo de edital.');
+
       const nome = file.name || 'edital';
       const extensao = getFileExtension(file);
+
       if (!ACCEPTED_EXTENSIONS.includes(extensao)) {
-        throw new Error('Formato não suportado. Envie .pdf, .txt, .docx, .doc, .md ou .json.');
+        throw new Error(
+          'Formato não suportado. Envie .pdf, .txt, .docx, .doc, .md ou .json.'
+        );
       }
 
       ultimaAnaliseCloudflare = null;
@@ -6214,51 +6309,118 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
       showAnalysis(`⌛ Lendo ${nome}...`);
       const textoExtraido = await extrairTextoDoArquivo(file);
       const textoParaIA = prepararTextoParaIA(textoExtraido);
-      if (textoParaIA.length < 100) throw new Error('O arquivo está vazio ou possui texto insuficiente para análise.');
 
-      showAnalysis('⌛ Texto extraído. A IA está identificando cargos, disciplinas e tópicos...');
-      const analisarUrl = new URL(API_ANALISAR, window.location.origin).toString();
-      let response;
-      try {
-        response = await fetch(analisarUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            nome_arquivo: nome,
-            tipo_arquivo: file.type || extensao,
-            texto_edital: textoParaIA,
-            texto: textoParaIA
-          })
-        });
-      } catch (networkError) {
-        throw new Error(`Não foi possível conectar ao Worker em ${analisarUrl}. Detalhe: ${networkError?.message || networkError}`);
+      if (textoParaIA.length < 100) {
+        throw new Error(
+          'O arquivo está vazio ou possui texto insuficiente para análise.'
+        );
       }
 
-      const textoResposta = await response.text();
-      let data = null;
-      if (textoResposta) {
-        try { data = JSON.parse(textoResposta); }
-        catch (_) { throw new Error(`A API retornou uma resposta que não é JSON: ${textoResposta.slice(0, 300)}`); }
-      }
-      if (!data) throw new Error('A API retornou uma resposta vazia.');
-      if (!response.ok || !data.ok) throw new Error(data.erro || `A análise falhou com HTTP ${response.status}.`);
+      const blocos = dividirTextoEmBlocosCliente(textoParaIA);
 
-      const vertical = normalizarResultado(data);
-      if (!vertical) throw new Error('A IA respondeu, mas não retornou cargos com disciplinas e tópicos válidos.');
+      if (!blocos.length) {
+        throw new Error('Não foi possível dividir o edital em blocos de análise.');
+      }
+
+      showAnalysis(
+        `⌛ Etapa 1 de ${blocos.length + 2}: identificando dados gerais do concurso...`
+      );
+
+      const respostaMetadados = await chamarApiJson(
+        API_METADADOS,
+        {
+          nome_arquivo: nome,
+          tipo_arquivo: file.type || extensao,
+          texto: textoParaIA.slice(0, 14000)
+        },
+        2
+      );
+
+      const metadados = respostaMetadados.resultado || {};
+      const resultadosBlocos = [];
+      const falhas = [];
+
+      for (let indice = 0; indice < blocos.length; indice += 1) {
+        showAnalysis(
+          `⌛ Analisando bloco ${indice + 1} de ${blocos.length}... ` +
+          'Aguarde; cada bloco é processado separadamente para evitar perda de conexão.'
+        );
+
+        try {
+          const respostaBloco = await chamarApiJson(
+            API_BLOCO,
+            {
+              bloco: blocos[indice],
+              indice,
+              total: blocos.length
+            },
+            2
+          );
+
+          resultadosBlocos.push(respostaBloco.resultado || { cargos: [] });
+        } catch (errorBloco) {
+          console.warn(`Falha no bloco ${indice + 1}:`, errorBloco);
+          resultadosBlocos.push({ cargos: [] });
+          falhas.push(indice + 1);
+        }
+      }
+
+      showAnalysis(
+        `⌛ Etapa final: consolidando cargos, disciplinas e tópicos...`
+      );
+
+      const respostaFinal = await chamarApiJson(
+        API_FINALIZAR,
+        {
+          metadados,
+          resultados_blocos: resultadosBlocos
+        },
+        2
+      );
+
+      const vertical = normalizarResultado(respostaFinal);
+
+      if (!vertical) {
+        throw new Error(
+          'A análise terminou, mas não retornou cargos com disciplinas e tópicos válidos.'
+        );
+      }
 
       ultimaAnaliseCloudflare = vertical;
-      cargoSelecionadoChave = vertical.cargos.length === 1
-        ? gerarChaveCargo(vertical.cargos[0], 0)
-        : '';
-      try { localStorage.setItem('aprovaUltimoEditalMulticargos', JSON.stringify(vertical)); } catch (_) {}
+      cargoSelecionadoChave =
+        vertical.cargos.length === 1
+          ? gerarChaveCargo(vertical.cargos[0], 0)
+          : '';
+
+      try {
+        localStorage.setItem(
+          'aprovaUltimoEditalMulticargos',
+          JSON.stringify(vertical)
+        );
+      } catch (_) {}
+
       renderizarSeletorDeCargos();
-      notify(`${vertical.cargos.length} cargo(s) identificado(s). Selecione o cargo desejado.`);
+
+      if (falhas.length) {
+        notify(
+          `${vertical.cargos.length} cargo(s) identificado(s). ` +
+          `Os blocos ${falhas.join(', ')} não responderam e foram ignorados.`
+        );
+      } else {
+        notify(
+          `${vertical.cargos.length} cargo(s) identificado(s). Selecione o cargo desejado.`
+        );
+      }
     } catch (error) {
       console.error('Erro durante a análise do edital:', error);
+
       showAnalysis(`
         <div><strong>Erro na análise do edital</strong></div>
-        <div style="margin-top:8px;line-height:1.55">${escapeHtml(error?.message || 'Não foi possível analisar o edital.')}</div>
+        <div style="margin-top:8px;line-height:1.55">
+          ${escapeHtml(error?.message || 'Não foi possível analisar o edital.')}
+        </div>
       `, { html: true });
+
       notify('Falha na análise com IA.');
     }
   }
