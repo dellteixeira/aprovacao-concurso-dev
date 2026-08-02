@@ -297,7 +297,7 @@ export default {
         return json({
           ok: true,
           service: "Aprova Concurso DEV",
-          versao: "multicargos-2.1.0-fallback-catalogo",
+          versao: "multicargos-2.2.0-classificacao-semantica",
           modelo_teste: MODELO_TESTE,
           modelo_extracao: MODELO_EXTRACAO,
           ai: Boolean(env.AI),
@@ -695,12 +695,16 @@ OBJETIVO:
 
 REGRAS CRÍTICAS:
 - Use SOMENTE chaves existentes no catálogo. Nunca crie cargo novo nesta etapa.
+- Cargo, função, especialidade, atribuição, requisito, etapa do concurso, procedimento administrativo e política de cotas NÃO são disciplinas.
 - Diploma, certificado, escolaridade, experiência, registro profissional, idade, CNH, jornada, salário e requisitos de investidura NÃO são disciplinas nem tópicos de estudo.
-- Ignore capítulos de requisitos, atribuições, remuneração, inscrição, reserva de vagas e documentação, salvo quando houver conteúdo programático explícito.
+- Pagamento de inscrição, DAE, boleto, inscrição, isenção, recurso, heteroidentificação, identificação étnica, pertencimento etnoterritorial, reconhecimento indígena, reserva de vagas, documentação e convocação NÃO são conteúdo programático.
+- Ignore capítulos de requisitos, atribuições, remuneração, inscrição, reserva de vagas, cotas, documentação, cronograma e procedimentos, salvo quando houver um anexo explicitamente intitulado CONTEÚDO PROGRAMÁTICO.
+- "Conhecimentos Gerais" e "Conhecimentos Específicos" são apenas GRUPOS. Nunca os retorne como disciplina ou tópico.
+- O nome de um cargo, por exemplo "Técnico Judiciário", nunca pode ser disciplina nem tópico.
+- Nomes genéricos isolados como "Direito", "Atribuições", "Cargo" e "Prova" não são disciplinas válidas. Prefira a denominação completa, como "Direito Constitucional" ou "Noções de Direito Administrativo".
 - Um conteúdo comum só deve ser replicado para todos os cargos quando o texto disser claramente "todos os cargos", "todos os candidatos" ou indicar grupo/códigos abrangidos.
 - Conteúdo específico deve ser vinculado apenas ao cargo, código, área ou especialidade explicitamente indicado.
 - Preserve a literalidade dos nomes das disciplinas e dos tópicos.
-- "Conhecimentos Gerais" e "Conhecimentos Específicos" são grupos; coloque-os em disciplina.grupo.
 - O status inicial de todo tópico é "pendente".
 - Peso mínimo 1. Quantidade de questões null quando ausente.
 - Em "evidencias", registre pequenos trechos ou títulos do bloco que sustentem o vínculo. Não invente.
@@ -743,18 +747,45 @@ async function finalizarVagasEndpoint(request) {
       return Array.isArray(fonte?.aplicacoes) ? fonte.aplicacoes : [];
     });
 
+    const catalogoPorChave = new Map(
+      catalogo
+        .map(vaga => [textoSeguro(vaga?.chave_cargo), vaga])
+        .filter(([chave]) => Boolean(chave))
+    );
+
     const porChave = new Map();
     for (const aplicacao of aplicacoes) {
       const chave = textoSeguro(aplicacao?.chave_cargo);
-      if (!chave) continue;
-      const disciplinas = consolidarDisciplinasSeguras(aplicacao.disciplinas);
+      const vagaCatalogada = catalogoPorChave.get(chave);
+
+      /* Ignora qualquer chave criada ou alterada pela IA. */
+      if (!chave || !vagaCatalogada) continue;
+
+      const disciplinas = consolidarDisciplinasSeguras(
+        aplicacao.disciplinas,
+        vagaCatalogada
+      );
+
       const evidencias = Array.isArray(aplicacao.evidencias)
-        ? aplicacao.evidencias.map(textoSeguro).filter(Boolean)
+        ? aplicacao.evidencias
+            .map(textoSeguro)
+            .filter(evidencia => evidencia && !ehTextoAdministrativo(evidencia))
         : [];
-      if (!porChave.has(chave)) porChave.set(chave, { disciplinas: [], evidencias: [] });
+
+      if (!disciplinas.length) continue;
+
+      if (!porChave.has(chave)) {
+        porChave.set(chave, { disciplinas: [], evidencias: [] });
+      }
+
       const atual = porChave.get(chave);
-      atual.disciplinas = consolidarDisciplinasSeguras([...atual.disciplinas, ...disciplinas]);
-      atual.evidencias = Array.from(new Set([...atual.evidencias, ...evidencias])).slice(0, 20);
+      atual.disciplinas = consolidarDisciplinasSeguras(
+        [...atual.disciplinas, ...disciplinas],
+        vagaCatalogada
+      );
+      atual.evidencias = Array.from(
+        new Set([...atual.evidencias, ...evidencias])
+      ).slice(0, 20);
     }
 
     const cargos = catalogo.map(vaga => {
@@ -1048,75 +1079,183 @@ function consolidarCatalogoVagas(
 }
 
 function consolidarDisciplinasSeguras(
-  disciplinasBrutas
+  disciplinasBrutas,
+  cargo = {}
 ) {
-  const filtradas =
-    (
-      disciplinasBrutas ||
-      []
-    )
-      .map(
-        disciplina => {
-          const nome =
-            textoSeguro(
-              disciplina?.nome
-            );
+  const filtradas = (disciplinasBrutas || [])
+    .map(disciplina => sanitizarDisciplina(disciplina, cargo))
+    .filter(Boolean);
 
-          if (
-            !nome ||
-            ehTextoDeRequisito(
-              nome
-            ) ||
-            nome.length > 180
-          ) {
-            return null;
-          }
+  return consolidarDisciplinas(filtradas);
+}
 
-          const topicos =
-            Array.isArray(
-              disciplina?.topicos
-            )
-              ? disciplina.topicos.filter(
-                  topico => {
-                    const texto =
-                      textoSeguro(
-                        typeof topico ===
-                          "string"
-                          ? topico
-                          : topico?.nome
-                      );
+function sanitizarDisciplina(disciplina, cargo = {}) {
+  if (!disciplina || typeof disciplina !== "object") {
+    return null;
+  }
 
-                    return (
-                      texto &&
-                      !ehTextoDeRequisito(
-                        texto
-                      ) &&
-                      texto.length <= 500
-                    );
-                  }
-                )
-              : [];
+  const nome = textoSeguro(disciplina.nome);
 
-          if (!topicos.length) {
-            return null;
-          }
+  if (!ehNomeDisciplinaValido(nome, cargo)) {
+    return null;
+  }
 
-          return {
-            ...disciplina,
-            topicos
-          };
-        }
-      )
-      .filter(Boolean);
+  const topicos = (Array.isArray(disciplina.topicos)
+    ? disciplina.topicos
+    : [])
+    .map(topico => {
+      const nomeTopico = textoSeguro(
+        typeof topico === "string" ? topico : topico?.nome
+      );
 
-  return consolidarDisciplinas(
-    filtradas
+      if (!ehTopicoProgramaticoValido(nomeTopico, nome, cargo)) {
+        return null;
+      }
+
+      return {
+        nome: nomeTopico,
+        status:
+          topico?.status === "concluido"
+            ? "concluido"
+            : "pendente"
+      };
+    })
+    .filter(Boolean);
+
+  if (!topicos.length) {
+    return null;
+  }
+
+  return {
+    ...disciplina,
+    nome,
+    grupo: normalizarGrupoDisciplina(disciplina.grupo),
+    prioridade: normalizarPrioridade(disciplina.prioridade),
+    peso: normalizarPeso(disciplina.peso),
+    quantidade_questoes: normalizarInteiroOuNull(
+      disciplina.quantidade_questoes ?? disciplina.numero_questoes
+    ),
+    topicos
+  };
+}
+
+function normalizarGrupoDisciplina(valor) {
+  const grupo = textoSeguro(valor);
+  const chave = normalizarChave(grupo);
+
+  if (chave.includes("conhecimentos gerais")) {
+    return "Conhecimentos Gerais";
+  }
+
+  if (chave.includes("conhecimentos especificos")) {
+    return "Conhecimentos Específicos";
+  }
+
+  return grupo || "Conteúdo programático";
+}
+
+function ehNomeDisciplinaValido(nome, cargo = {}) {
+  const chave = normalizarChave(nome);
+
+  if (!chave || nome.length > 160) {
+    return false;
+  }
+
+  if (
+    ehRotuloDeGrupo(nome) ||
+    ehTextoAdministrativo(nome) ||
+    ehTextoDeRequisito(nome) ||
+    ehNomeGenericoInvalido(nome) ||
+    coincideComCargo(nome, cargo)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function ehTopicoProgramaticoValido(
+  nomeTopico,
+  nomeDisciplina,
+  cargo = {}
+) {
+  if (!nomeTopico || nomeTopico.length > 500) {
+    return false;
+  }
+
+  if (
+    ehRotuloDeGrupo(nomeTopico) ||
+    ehTextoAdministrativo(nomeTopico) ||
+    ehTextoDeRequisito(nomeTopico) ||
+    coincideComCargo(nomeTopico, cargo)
+  ) {
+    return false;
+  }
+
+  const chaveTopico = normalizarChave(nomeTopico);
+  const chaveDisciplina = normalizarChave(nomeDisciplina);
+
+  /* Evita que o próprio nome da disciplina seja salvo como tópico. */
+  if (
+    chaveTopico === chaveDisciplina ||
+    chaveTopico === "conteudo programatico"
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function ehRotuloDeGrupo(valor) {
+  const texto = normalizarChave(valor);
+
+  return /^(conhecimentos gerais|conhecimentos especificos|conteudo programatico|programa de provas|prova objetiva|provas objetivas|disciplinas|materias|cargo|cargos)$/.test(
+    texto
+  );
+}
+
+function ehNomeGenericoInvalido(valor) {
+  const texto = normalizarChave(valor);
+
+  return /^(direito|atribuicoes|atribuicao|tecnico judiciario|analista judiciario|oficial de justica|funcao|funcoes|etapa|etapas|prova|avaliacao|concurso)$/.test(
+    texto
+  );
+}
+
+function coincideComCargo(valor, cargo = {}) {
+  const texto = normalizarChave(valor);
+
+  if (!texto) return false;
+
+  const referencias = [
+    cargo.nome,
+    cargo.especialidade,
+    cargo.codigo,
+    ...(Array.isArray(cargo.aliases) ? cargo.aliases : [])
+  ]
+    .map(normalizarChave)
+    .filter(Boolean);
+
+  return referencias.some(referencia =>
+    texto === referencia ||
+    (referencia.length >= 8 && texto.includes(referencia))
+  );
+}
+
+function ehTextoAdministrativo(valor) {
+  const texto = normalizarChave(valor);
+
+  return /(?:^|\b)(?:procedimento de inscricao|pagamento da inscricao|taxa de inscricao|gerenciamento do documento de arrecadacao|documento de arrecadacao estadual|dae|boleto|isencao da taxa|pedido de isencao|inscricao preliminar|inscricao definitiva|confirmacao de inscricao|recurso administrativo|interposicao de recurso|heteroidentificacao|identificacao etnica|pertencimento etnoterritorial|reconhecimento do povo indigena|reserva de vagas|cotas raciais|cotas para negros|cotas para indigenas|pessoa com deficiencia|documentacao comprobatória|documentacao comprobatoria|envio de documentos|convocacao|nomeacao|posse|exercicio|cronograma|calendario|local de prova|cartao de confirmacao|resultado preliminar|resultado final|atribuicoes do cargo|descricao das atribuicoes|remuneracao|jornada de trabalho)(?:\b|$)/.test(
+    texto
   );
 }
 
 function ehTextoDeRequisito(valor) {
   const texto = normalizarChave(valor);
-  return /requisit|investidura|certificado|diploma|curso superior|ensino medio|registro profissional|conselho regional|experiencia minima|carteira nacional|cnh|idade minima|aptidao fisica/.test(texto);
+
+  return /requisit|investidura|certificado|diploma|curso superior|ensino medio|registro profissional|conselho regional|experiencia minima|carteira nacional|\bcnh\b|idade minima|aptidao fisica|escolaridade minima|formacao academica/.test(
+    texto
+  );
 }
 
 async function analisarMetadadosEtapa(request, env) {
