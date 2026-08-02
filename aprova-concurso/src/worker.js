@@ -29,6 +29,8 @@ const LIMITE_CATALOGO_POR_REQUISICAO = 9000;
 const LIMITE_MAPEAMENTO_POR_REQUISICAO = 9000;
 const MAXIMO_CARGOS_NO_MAPEAMENTO = 80;
 const LIMITE_CONTEXTO_FALLBACK_CATALOGO = 22000;
+const MAXIMO_CONTEXTOS_AUDITORIA_CATALOGO = 12;
+const LIMITE_CONTEXTO_ADJACENTE = 2200;
 
 const PRIORIDADES = ["alta", "media", "baixa"];
 
@@ -297,7 +299,7 @@ export default {
         return json({
           ok: true,
           service: "Aprova Concurso DEV",
-          versao: "multicargos-2.2.0-classificacao-semantica",
+          versao: "multicargos-2.3.0-auditoria-integral",
           modelo_teste: MODELO_TESTE,
           modelo_extracao: MODELO_EXTRACAO,
           ai: Boolean(env.AI),
@@ -365,7 +367,7 @@ export default {
         url.pathname === "/api/ai/finalizar-vagas" &&
         request.method === "POST"
       ) {
-        return finalizarVagasEndpoint(request);
+        return finalizarVagasEndpoint(request, env);
       }
 
       if (
@@ -483,6 +485,10 @@ async function catalogarVagasBlocoEndpoint(request, env) {
     const body = await lerJsonRequest(request);
     const bloco = limparTextoEdital(textoSeguro(body.bloco || body.texto))
       .slice(0, LIMITE_CATALOGO_POR_REQUISICAO);
+    const contextoAnterior = limparTextoEdital(textoSeguro(body.contexto_anterior))
+      .slice(-LIMITE_CONTEXTO_ADJACENTE);
+    const contextoSeguinte = limparTextoEdital(textoSeguro(body.contexto_seguinte))
+      .slice(0, LIMITE_CONTEXTO_ADJACENTE);
     const indice = Math.max(0, Number(body.indice) || 0);
     const total = Math.max(1, Number(body.total) || 1);
 
@@ -505,10 +511,18 @@ REGRAS CRÍTICAS:
 - "chave_documental" deve ser a identificação mais estável encontrada no próprio edital: prefira código do cargo; sem código, use nome + especialidade.
 - Em "aliases", inclua formas abreviadas ou alternativas explicitamente usadas no bloco.
 - Não invente dados. Use string vazia ou null quando ausente.
+- Não omita cargo que apareça em quadro de vagas, sumário, requisitos, cronograma de provas ou cabeçalho de conteúdo programático.
+- Se uma tabela estiver linearizada, reconstrua código, cargo, especialidade, requisito e vagas pelo contexto.
 - Se não houver vaga/cargo identificável, retorne vagas vazio.
 
-BLOCO:
+CONTEXTO ANTERIOR:
+${contextoAnterior || "[ausente]"}
+
+BLOCO CENTRAL:
 ${bloco}
+
+CONTEXTO SEGUINTE:
+${contextoSeguinte || "[ausente]"}
 `;
 
     const resultado = await executarJsonSchema(
@@ -547,11 +561,84 @@ async function consolidarCatalogoEndpoint(request, env) {
     let vagas = consolidarCatalogoVagas(vagasBrutas);
 
     /*
-     * Fallback: alguns PDFs perdem a estrutura das tabelas quando o texto é
-     * extraído. Nesse caso, cada bloco isolado pode retornar vazio, embora o
-     * edital contenha os cargos. O frontend envia um contexto condensado com
-     * os trechos mais relevantes para uma segunda leitura global.
+     * Auditoria global obrigatória: procura cargos omitidos mesmo quando a
+     * leitura por blocos já encontrou alguns registros.
      */
+    const contextosRecebidos = Array.isArray(body.contextos_catalogo)
+      ? body.contextos_catalogo
+      : [body.contexto_catalogo || body.contexto || body.texto];
+
+    const contextos = contextosRecebidos
+      .map(contexto => limparTextoEdital(textoSeguro(contexto)))
+      .filter(contexto => contexto.length >= 100)
+      .slice(0, MAXIMO_CONTEXTOS_AUDITORIA_CATALOGO);
+
+    const metadados = body.metadados && typeof body.metadados === "object"
+      ? body.metadados
+      : {};
+
+    const pistas = body.pistas && typeof body.pistas === "object"
+      ? body.pistas
+      : {};
+
+    for (let indiceAuditoria = 0; indiceAuditoria < contextos.length; indiceAuditoria += 1) {
+      const contexto = contextos[indiceAuditoria]
+        .slice(0, LIMITE_CONTEXTO_FALLBACK_CATALOGO);
+
+      const prompt = `
+Você fará uma AUDITORIA GLOBAL do catálogo de cargos de um edital.
+
+Auditoria ${indiceAuditoria + 1} de ${contextos.length}.
+
+CATÁLOGO PARCIAL JÁ ENCONTRADO:
+${JSON.stringify(vagas.map(vaga => ({
+  chave_cargo: vaga.chave_cargo,
+  codigo: vaga.codigo,
+  nome: vaga.nome,
+  especialidade: vaga.especialidade
+})))}
+
+OBJETIVO:
+- Confirmar os cargos já encontrados.
+- Acrescentar TODOS os cargos, áreas e especialidades legítimos que estiverem ausentes.
+- Reconstruir tabelas linearizadas sem transformar requisitos, atribuições, matérias ou etapas administrativas em cargos.
+
+REGRAS:
+- Não limite a resposta ao catálogo parcial.
+- Preserve "Técnico Judiciário" quando constar como cargo, mesmo sem código.
+- "Conhecimentos Gerais", "Conhecimentos Específicos", "Direito", "Atribuições", "Inscrição", "Heteroidentificação" e similares não são cargos.
+- Diploma, certificado e escolaridade são requisitos.
+- Use código, nome e especialidade como identificadores separados.
+- Não invente dados; use string vazia ou null quando ausentes.
+
+METADADOS:
+${JSON.stringify(metadados)}
+
+PISTAS DA TELA (apenas pistas):
+${JSON.stringify(pistas)}
+
+CONTEXTO:
+${contexto}
+`;
+
+      const auditado = await executarJsonSchema(
+        env,
+        prompt,
+        ESQUEMA_CATALOGO_VAGAS_BLOCO,
+        `auditoria_catalogo_${indiceAuditoria + 1}`,
+        3000
+      );
+
+      const novasVagas = Array.isArray(auditado?.vagas)
+        ? auditado.vagas
+        : [];
+
+      vagas = consolidarCatalogoVagas([
+        ...vagas,
+        ...novasVagas
+      ]);
+    }
+
     if (!vagas.length) {
       validarBindingAI(env);
 
@@ -636,7 +723,12 @@ ${contexto}
     return json({
       ok: true,
       resultado: {
-        vagas
+        vagas,
+        auditoria: {
+          contextos_processados: contextos.length,
+          candidatos_iniciais: vagasBrutas.length,
+          cargos_consolidados: vagas.length
+        }
       }
     });
   } catch (error) {
@@ -708,10 +800,18 @@ REGRAS CRÍTICAS:
 - O status inicial de todo tópico é "pendente".
 - Peso mínimo 1. Quantidade de questões null quando ausente.
 - Em "evidencias", registre pequenos trechos ou títulos do bloco que sustentem o vínculo. Não invente.
+- Use o contexto anterior e seguinte para recuperar cabeçalhos de cargo/grupo cortados entre páginas.
+- Hierarquia obrigatória: cargo > grupo > disciplina > tópico.
 - Se não houver conteúdo programático útil, retorne aplicacoes vazio.
 
-BLOCO:
+CONTEXTO ANTERIOR:
+${contextoAnterior || "[ausente]"}
+
+BLOCO CENTRAL:
 ${bloco}
+
+CONTEXTO SEGUINTE:
+${contextoSeguinte || "[ausente]"}
 `;
 
     const resultado = await executarJsonSchema(
@@ -729,7 +829,7 @@ ${bloco}
   }
 }
 
-async function finalizarVagasEndpoint(request) {
+async function finalizarVagasEndpoint(request, env) {
   try {
     const body = await lerJsonRequest(request);
     const metadados = body.metadados && typeof body.metadados === "object"
@@ -805,12 +905,17 @@ async function finalizarVagasEndpoint(request) {
         evidencias_conteudo: mapeado.evidencias,
         disciplinas: mapeado.disciplinas
       };
-    }).filter(cargo => cargo.nome && cargo.disciplinas.length);
+    }).filter(cargo => cargo.nome);
 
     if (!cargos.length) {
+      return json({ ok: false, erro: "Nenhum cargo válido permaneceu após a consolidação." }, 422);
+    }
+
+    const cargosComConteudo = cargos.filter(cargo => cargo.disciplinas.length);
+    if (!cargosComConteudo.length) {
       return json({
         ok: false,
-        erro: "Os cargos foram catalogados, mas nenhum conteúdo programático pôde ser vinculado com segurança. Verifique se o edital contém anexo de conteúdos ou se ele foi extraído integralmente."
+        erro: "Os cargos foram encontrados, mas nenhum conteúdo programático foi vinculado. Verifique se o anexo de conteúdos foi extraído integralmente."
       }, 422);
     }
 
@@ -827,6 +932,13 @@ async function finalizarVagasEndpoint(request) {
         data_prova: normalizarData(concursoBruto.data_prova || concursoBruto.prova)
       },
       cargos,
+      diagnostico: {
+        cargos_catalogados: cargos.length,
+        cargos_com_conteudo: cargosComConteudo.length,
+        cargos_sem_conteudo: cargos
+          .filter(cargo => !cargo.disciplinas.length)
+          .map(cargo => montarNomeCargo(cargo))
+      },
       estrategia: textoSeguro(metadados.estrategia) || criarEstrategiaMulticargos(cargos)
     };
 
