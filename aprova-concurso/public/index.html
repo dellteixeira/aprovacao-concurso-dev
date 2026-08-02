@@ -3748,26 +3748,120 @@ body.dark .final-session-summary,body.dark .final-topic-select{background:#101b3
 
 
 <script id="aprovaWeeklyStudyHours">
-/* Cálculo semanal canônico: cada check da grade grava uma sessão no Supabase. */
+/* Registro semanal canônico: cada check da grade grava uma sessão no Supabase. */
 (() => {
   'use strict';
 
   const ACTIVE_KEY = 'aprovaActiveContestId';
+  const REGISTRY_KEY = 'aprovaContestRegistryV2';
+  const STATE_PREFIX = 'aprovaContestState:';
   const LOCAL_COMPLETED_KEY = 'aprovaPlanCompleted';
   const DAYS = ['SEG','TER','QUA','QUI','SEX','SÁB','DOM'];
   let refreshTimer = 0;
   let loading = false;
+  let saving = false;
 
   const readJSON = (key, fallback) => {
     try {
       const value = localStorage.getItem(key);
       return value === null ? fallback : JSON.parse(value);
-    } catch (_) { return fallback; }
+    } catch (_) {
+      return fallback;
+    }
   };
   const writeJSON = (key, value) => localStorage.setItem(key, JSON.stringify(value));
-  const activeContestId = () => String(localStorage.getItem(ACTIVE_KEY) || '').trim();
-  const validUuid = value => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+  const text = value => value === null || value === undefined ? '' : String(value).trim();
+  const validUuid = value => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text(value));
   const client = () => window.supabaseClient || null;
+  const activeContestId = () => text(localStorage.getItem(ACTIVE_KEY));
+  const notify = message => (window.toast || window.alert)(message);
+
+  function registry() {
+    const value = readJSON(REGISTRY_KEY, []);
+    return Array.isArray(value) ? value : [];
+  }
+
+  function activeLocalContest() {
+    const id = activeContestId();
+    if (!id) return null;
+    return registry().find(item => text(item?.id) === id) || readJSON('aprovaConcurso', null);
+  }
+
+  async function currentUser() {
+    const sb = client();
+    if (!sb) throw new Error('O Supabase não está conectado. Abra Minha conta e verifique a conexão.');
+
+    const { data: sessionData, error: sessionError } = await sb.auth.getSession();
+    if (sessionError) console.warn('Não foi possível restaurar a sessão:', sessionError.message);
+    if (sessionData?.session?.user) return sessionData.session.user;
+
+    const { data, error } = await sb.auth.getUser();
+    if (error) throw new Error(`Não foi possível validar sua sessão: ${error.message}`);
+    if (!data?.user) throw new Error('Sua sessão expirou. Entre novamente em Minha conta.');
+    return data.user;
+  }
+
+  async function syncContest() {
+    if (typeof window.aprovaCloudSync?.sync !== 'function') return false;
+    try {
+      await window.aprovaCloudSync.sync();
+      return true;
+    } catch (error) {
+      console.warn('Falha ao sincronizar o concurso:', error?.message || error);
+      return false;
+    }
+  }
+
+  async function resolveRemoteContestId(sb, user) {
+    let id = activeContestId();
+    if (validUuid(id)) return id;
+
+    await syncContest();
+    id = activeContestId();
+    if (validUuid(id)) return id;
+
+    const local = activeLocalContest();
+    if (!local) throw new Error('Nenhum concurso ativo foi encontrado.');
+
+    let query = sb
+      .from('concursos')
+      .select('id,titulo,cargo,orgao,banca,data_prova,created_at')
+      .eq('user_id', user.id);
+
+    const titulo = text(local.titulo || local.nome);
+    const cargo = text(local.cargo);
+    if (titulo) query = query.eq('titulo', titulo);
+    if (cargo) query = query.eq('cargo', cargo);
+
+    const { data, error } = await query.order('created_at', { ascending: false }).limit(1);
+    if (error) throw new Error(`Não foi possível localizar o concurso no Supabase: ${error.message}`);
+
+    const remote = Array.isArray(data) ? data[0] : null;
+    if (!remote?.id || !validUuid(remote.id)) {
+      throw new Error('O concurso ainda está salvo apenas no navegador. Aguarde a sincronização com o Supabase e tente novamente.');
+    }
+
+    const oldId = id;
+    const newId = text(remote.id);
+    localStorage.setItem(ACTIVE_KEY, newId);
+
+    const updated = registry().map(item => text(item?.id) === oldId ? { ...item, ...remote, id: newId } : item);
+    if (updated.length) writeJSON(REGISTRY_KEY, updated);
+
+    if (oldId && oldId !== newId) {
+      const oldState = localStorage.getItem(STATE_PREFIX + oldId);
+      if (oldState && !localStorage.getItem(STATE_PREFIX + newId)) {
+        localStorage.setItem(STATE_PREFIX + newId, oldState);
+      }
+      localStorage.removeItem(STATE_PREFIX + oldId);
+    }
+
+    window.dispatchEvent(new CustomEvent('aprova:active-contest-changed', {
+      detail: { oldId, newId }
+    }));
+
+    return newId;
+  }
 
   function mondayOf(date = new Date()) {
     const d = new Date(date);
@@ -3777,130 +3871,177 @@ body.dark .final-session-summary,body.dark .final-topic-select{background:#101b3
     d.setHours(0, 0, 0, 0);
     return d;
   }
+
   function addDays(date, amount) {
     const d = new Date(date);
     d.setDate(d.getDate() + amount);
     return d;
   }
+
   function isoLocal(date) {
     const y = date.getFullYear();
     const m = String(date.getMonth() + 1).padStart(2, '0');
     const d = String(date.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   }
+
   function dateForDayLabel(label, base = new Date()) {
-    const index = DAYS.indexOf(String(label || '').toUpperCase());
+    const index = DAYS.indexOf(text(label).toUpperCase());
     return addDays(mondayOf(base), Math.max(0, index));
   }
+
   function parseTimeToMinutes(value) {
-    const match = String(value || '').match(/^(\d{1,2}):(\d{2})$/);
+    const match = text(value).match(/^(\d{1,2}):(\d{2})$/);
     return match ? Number(match[1]) * 60 + Number(match[2]) : 0;
   }
+
   function endTime(start, duration) {
     const total = parseTimeToMinutes(start) + Number(duration || 0);
     return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
   }
+
   function formatMinutes(total) {
     const minutes = Math.max(0, Math.round(Number(total) || 0));
     return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}min`;
   }
+
   function normalizeText(value) {
-    return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    return text(value)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
   }
+
   function sessionFromCheck(check) {
     const shell = check.closest('.slot-shell');
     const slot = shell?.querySelector('[data-cycle-session]');
     if (!shell || !slot) return null;
-    const [day, start] = String(slot.dataset.cycleSession || '').split('|');
+
+    const [day, start] = text(slot.dataset.cycleSession).split('|');
     const subject = slot.querySelector('strong')?.textContent?.trim() || 'Disciplina';
     const small = slot.querySelector('small')?.textContent || '';
     const durationMatch = small.match(/·\s*(\d+)\s*min/i);
-    const duration = Number(durationMatch?.[1] || 0);
-    const date = dateForDayLabel(day);
-    const dateString = isoLocal(date);
+    const duration = Math.max(1, Number(durationMatch?.[1] || 0));
+    const dateString = isoLocal(dateForDayLabel(day));
     let topics = [];
-    try { topics = JSON.parse(decodeURIComponent(slot.dataset.sessionTopics || '%5B%5D')); } catch (_) {}
-    const slotKey = `${dateString}|${start}|${normalizeText(subject)}`;
+    try {
+      topics = JSON.parse(decodeURIComponent(slot.dataset.sessionTopics || '%5B%5D'));
+    } catch (_) {}
+
     return {
-      shell, slot, day, start, subject, duration, topics, dateString,
-      finish: endTime(start, duration), slotKey,
+      shell,
+      slot,
+      day,
+      start,
+      subject,
+      duration,
+      topics,
+      dateString,
+      finish: endTime(start, duration),
+      slotKey: `${dateString}|${start}|${normalizeText(subject)}`,
       localKey: shell.dataset.sessionKey || `${day}|${start}|${subject}`
     };
   }
+
   function setCheckVisual(check, completed) {
     const shell = check.closest('.slot-shell');
     shell?.classList.toggle('is-completed', completed);
     check.classList.toggle('checked', completed);
     check.setAttribute('aria-pressed', String(completed));
     check.title = completed ? 'Marcar como pendente' : 'Marcar como estudado';
+    if (check.matches('input[type="checkbox"]')) check.checked = completed;
   }
+
   function updateLocalCompletion(info, completed) {
     const map = readJSON(LOCAL_COMPLETED_KEY, {});
-    if (completed) map[info.localKey] = true;
-    else delete map[info.localKey];
-    writeJSON(LOCAL_COMPLETED_KEY, map);
+    const safeMap = map && typeof map === 'object' && !Array.isArray(map) ? map : {};
+    if (completed) safeMap[info.localKey] = true;
+    else delete safeMap[info.localKey];
+    writeJSON(LOCAL_COMPLETED_KEY, safeMap);
     try { window.aprovaContestManager?.snapshot?.(); } catch (_) {}
   }
-  async function currentUser() {
-    const sb = client();
-    if (!sb) return null;
-    const { data, error } = await sb.auth.getUser();
-    if (error) return null;
-    return data?.user || null;
-  }
+
   async function persistSession(info, completed) {
     const sb = client();
-    const contestId = activeContestId();
+    if (!sb) throw new Error('O Supabase não está conectado. Abra Minha conta e verifique a conexão.');
+
     const user = await currentUser();
-    if (!sb || !user || !validUuid(contestId)) return false;
+    const contestId = await resolveRemoteContestId(sb, user);
+    if (!validUuid(contestId)) throw new Error('O concurso ativo ainda não recebeu um UUID válido do Supabase.');
+
     const payload = {
       user_id: user.id,
       concurso_id: contestId,
       materia: info.subject,
-      disciplina: info.subject,
-      topicos: Array.isArray(info.topics) ? info.topics : [],
       data_sessao: info.dateString,
-      inicio: info.start,
-      fim: info.finish,
+      inicio: info.start || null,
       duration_minutes: info.duration,
       completed,
-      slot_key: info.slotKey
+      slot_key: info.slotKey,
+      updated_at: new Date().toISOString()
     };
+
     const { error } = await sb.from('study_sessions').upsert(payload, {
       onConflict: 'user_id,concurso_id,slot_key'
     });
-    if (error) {
-      const missing = ['42P01', 'PGRST205'].includes(String(error.code || '')) ||
-        /study_sessions|schema cache|could not find the table/i.test(String(error.message || ''));
-      if (missing) return false;
-      throw error;
+
+    if (!error) return true;
+
+    const code = String(error.code || '');
+    const message = String(error.message || '');
+    if (['42P01','PGRST205'].includes(code) || /study_sessions|schema cache|could not find the table/i.test(message)) {
+      throw new Error('A tabela study_sessions ainda não existe no Supabase ou não entrou no cache da API.');
     }
-    return true;
+    if (code === '42P10') {
+      throw new Error('Falta a restrição UNIQUE de user_id, concurso_id e slot_key na tabela study_sessions.');
+    }
+    if (code === '42501') {
+      throw new Error('A política RLS da tabela study_sessions não permite registrar esta sessão.');
+    }
+    if (code === '42703') {
+      throw new Error(`A tabela study_sessions não possui uma das colunas esperadas: ${message}`);
+    }
+    throw new Error(`Erro do Supabase: ${message || code || 'falha desconhecida'}`);
   }
+
   function weeklyBounds(offsetWeeks = 0) {
     const start = addDays(mondayOf(), offsetWeeks * 7);
     const end = addDays(start, 7);
     return { start: isoLocal(start), end: isoLocal(end) };
   }
+
   async function fetchSessions(start, end) {
     const sb = client();
-    const contestId = activeContestId();
-    const user = await currentUser();
-    if (!sb || !user || !validUuid(contestId)) return [];
+    if (!sb) return [];
+
+    let user;
+    let contestId;
+    try {
+      user = await currentUser();
+      contestId = await resolveRemoteContestId(sb, user);
+    } catch (_) {
+      return [];
+    }
+    if (!validUuid(contestId)) return [];
+
     const { data, error } = await sb.from('study_sessions')
-      .select('data_sessao,inicio,duration_minutes,completed,slot_key,materia,disciplina')
+      .select('data_sessao,inicio,duration_minutes,completed,slot_key,materia')
       .eq('user_id', user.id)
       .eq('concurso_id', contestId)
       .gte('data_sessao', start)
       .lt('data_sessao', end);
+
     if (error) {
-      const missing = ['42P01', 'PGRST205'].includes(String(error.code || '')) ||
-        /study_sessions|schema cache|could not find the table/i.test(String(error.message || ''));
-      if (missing) return [];
+      const code = String(error.code || '');
+      const message = String(error.message || '');
+      if (['42P01','PGRST205'].includes(code) || /study_sessions|schema cache|could not find the table/i.test(message)) return [];
       throw error;
     }
     return Array.isArray(data) ? data : [];
   }
+
   function updateDashboard(currentRows, previousRows) {
     const completedCurrent = currentRows.filter(row => row.completed);
     const currentMinutes = completedCurrent.reduce((sum, row) => sum + Number(row.duration_minutes || 0), 0);
@@ -3910,8 +4051,9 @@ body.dark .final-session-summary,body.dark .final-topic-select{background:#101b3
 
     const trend = hours?.closest('article')?.querySelector('.trend');
     if (trend) {
-      if (!currentMinutes && !previousMinutes) trend.textContent = 'Marque uma sessão concluída para iniciar o cálculo semanal.';
-      else {
+      if (!currentMinutes && !previousMinutes) {
+        trend.textContent = 'Marque uma sessão concluída para iniciar o cálculo semanal.';
+      } else {
         const variation = previousMinutes > 0 ? Math.round(((currentMinutes - previousMinutes) / previousMinutes) * 100) : 100;
         const sign = variation > 0 ? '+' : '';
         trend.innerHTML = `<b>${sign}${variation}%</b> em relação à última semana`;
@@ -3919,15 +4061,20 @@ body.dark .final-session-summary,body.dark .final-topic-select{background:#101b3
     }
 
     const byDate = new Map();
-    completedCurrent.forEach(row => byDate.set(row.data_sessao, (byDate.get(row.data_sessao) || 0) + Number(row.duration_minutes || 0)));
+    completedCurrent.forEach(row => {
+      byDate.set(row.data_sessao, (byDate.get(row.data_sessao) || 0) + Number(row.duration_minutes || 0));
+    });
     const start = mondayOf();
-    const daily = DAYS.map((_, i) => byDate.get(isoLocal(addDays(start, i))) || 0);
+    const daily = DAYS.map((_, index) => byDate.get(isoLocal(addDays(start, index))) || 0);
     const max = Math.max(1, ...daily);
     const chart = document.querySelector('.dash-bottom article:last-child .chart');
-    if (chart) chart.innerHTML = DAYS.map((day, i) => `<div class="day"><div class="chart-bar${i === ((new Date().getDay()+6)%7) ? ' now' : ''}" style="height:${daily[i] ? Math.max(8, Math.round((daily[i]/max)*100)) : 2}%" title="${formatMinutes(daily[i])}"></div>${day}</div>`).join('');
+    if (chart) {
+      chart.innerHTML = DAYS.map((day, index) => `<div class="day"><div class="chart-bar${index === ((new Date().getDay() + 6) % 7) ? ' now' : ''}" style="height:${daily[index] ? Math.max(8, Math.round((daily[index] / max) * 100)) : 2}%" title="${formatMinutes(daily[index])}"></div>${day}</div>`).join('');
+    }
     const weeklyLabel = chart?.closest('article')?.querySelector('.tiny-label');
     if (weeklyLabel) weeklyLabel.textContent = formatMinutes(currentMinutes).toUpperCase();
   }
+
   function applyRemoteCompletion(rows) {
     const completedKeys = new Set(rows.filter(row => row.completed).map(row => row.slot_key));
     document.querySelectorAll('#plan .session-check').forEach(check => {
@@ -3938,6 +4085,7 @@ body.dark .final-session-summary,body.dark .final-topic-select{background:#101b3
       updateLocalCompletion(info, completed);
     });
   }
+
   async function refreshWeeklyHours() {
     if (loading) return;
     loading = true;
@@ -3952,8 +4100,11 @@ body.dark .final-session-summary,body.dark .final-topic-select{background:#101b3
       applyRemoteCompletion(currentRows);
     } catch (error) {
       console.warn('Não foi possível atualizar as horas semanais:', error?.message || error);
-    } finally { loading = false; }
+    } finally {
+      loading = false;
+    }
   }
+
   function scheduleRefresh(delay = 120) {
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(refreshWeeklyHours, delay);
@@ -3962,33 +4113,53 @@ body.dark .final-session-summary,body.dark .final-topic-select{background:#101b3
   document.addEventListener('click', async event => {
     const check = event.target.closest('#plan .session-check');
     if (!check) return;
+
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
+
+    if (saving) {
+      notify('Aguarde o registro da sessão anterior.');
+      return;
+    }
+
     const info = sessionFromCheck(check);
-    if (!info) return;
+    if (!info) {
+      notify('Não foi possível identificar esta sessão do plano.');
+      return;
+    }
+
     const completed = check.getAttribute('aria-pressed') !== 'true';
     setCheckVisual(check, completed);
     updateLocalCompletion(info, completed);
     check.disabled = true;
+    saving = true;
+
     try {
-      const saved = await persistSession(info, completed);
-      if (!saved) throw new Error('Entre na sua conta e mantenha um concurso ativo para registrar as horas.');
+      await persistSession(info, completed);
       await refreshWeeklyHours();
-      (window.toast || window.alert)(completed ? `Sessão concluída: +${info.duration} minutos nesta semana.` : 'Sessão removida do cálculo semanal.');
+      notify(completed ? `Sessão concluída: +${info.duration} minutos nesta semana.` : 'Sessão removida do cálculo semanal.');
     } catch (error) {
       setCheckVisual(check, !completed);
       updateLocalCompletion(info, !completed);
-      (window.toast || window.alert)(error?.message || 'Não foi possível registrar a sessão no Supabase.');
-    } finally { check.disabled = false; }
+      notify(error?.message || 'Não foi possível registrar a sessão no Supabase.');
+    } finally {
+      check.disabled = false;
+      saving = false;
+    }
   }, true);
 
   const observer = new MutationObserver(mutations => {
-    if (mutations.some(m => [...m.addedNodes].some(node => node.nodeType === 1 && (node.matches?.('.canonical-planner,.session-check') || node.querySelector?.('.session-check'))))) scheduleRefresh(80);
+    const changed = mutations.some(mutation => [...mutation.addedNodes].some(node =>
+      node.nodeType === 1 && (node.matches?.('.canonical-planner,.session-check') || node.querySelector?.('.session-check'))
+    ));
+    if (changed) scheduleRefresh(80);
   });
+
   const startObserver = () => {
     const target = document.querySelector('#plan .planner-wrap') || document.body;
-    observer.observe(target, { childList:true, subtree:true });
+    observer.disconnect();
+    observer.observe(target, { childList: true, subtree: true });
   };
 
   window.addEventListener('aprova:plan-updated', () => scheduleRefresh(50));
@@ -3996,10 +4167,21 @@ body.dark .final-session-summary,body.dark .final-topic-select{background:#101b3
   window.addEventListener('storage', event => {
     if ([ACTIVE_KEY, 'aprovaPlano'].includes(event.key)) scheduleRefresh(50);
   });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleRefresh(0); });
-  window.addEventListener('online', () => scheduleRefresh(0));
-  document.addEventListener('DOMContentLoaded', () => { startObserver(); scheduleRefresh(400); });
-  if (document.readyState !== 'loading') { startObserver(); scheduleRefresh(400); }
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) scheduleRefresh(0);
+  });
+  window.addEventListener('online', () => {
+    syncContest().finally(() => scheduleRefresh(0));
+  });
+  document.addEventListener('DOMContentLoaded', () => {
+    startObserver();
+    syncContest().finally(() => scheduleRefresh(500));
+  }, { once: true });
+  if (document.readyState !== 'loading') {
+    startObserver();
+    syncContest().finally(() => scheduleRefresh(500));
+  }
+
   window.aprovaRefreshWeeklyHours = refreshWeeklyHours;
 })();
 </script>
