@@ -1,12 +1,28 @@
 const MODELO_TESTE = "@cf/zai-org/glm-4.7-flash";
 const MODELO_EXTRACAO = "@cf/meta/llama-3.1-8b-instruct-fast";
+const MODELO_FALLBACK = "@cf/zai-org/glm-4.7-flash";
 
-const LIMITE_CURTO = 22000;
-const TAMANHO_BLOCO = 14000;
-const SOBREPOSICAO_BLOCO = 1200;
-const MAXIMO_BLOCOS = 6;
-const LIMITE_TEXTO_TOTAL = 80000;
-const CONCORRENCIA_IA = 3;
+/*
+ * Limites conservadores para reduzir respostas interrompidas
+ * e inconsistências no Content-Length da Workers AI.
+ */
+const LIMITE_CURTO = 14000;
+const TAMANHO_BLOCO = 9000;
+const SOBREPOSICAO_BLOCO = 900;
+const MAXIMO_BLOCOS = 8;
+const LIMITE_TEXTO_TOTAL = 68000;
+
+/*
+ * Uma chamada por vez. Chamadas simultâneas extensas podem
+ * provocar respostas incompletas na infraestrutura da IA.
+ */
+const CONCORRENCIA_IA = 1;
+
+/*
+ * Tentativas automáticas para falhas transitórias da Workers AI.
+ */
+const MAXIMO_TENTATIVAS_IA = 3;
+const ESPERA_REPETICAO_MS = 900;
 
 const PRIORIDADES = ["alta", "media", "baixa"];
 
@@ -219,7 +235,7 @@ export default {
         return json({
           ok: true,
           service: "Aprova Concurso DEV",
-          versao: "multicargos-1.0.0",
+          versao: "multicargos-1.1.0-retry",
           modelo_teste: MODELO_TESTE,
           modelo_extracao: MODELO_EXTRACAO,
           ai: Boolean(env.AI),
@@ -232,7 +248,9 @@ export default {
             limite_curto: LIMITE_CURTO,
             tamanho_bloco: TAMANHO_BLOCO,
             maximo_blocos: MAXIMO_BLOCOS,
-            concorrencia: CONCORRENCIA_IA
+            concorrencia: CONCORRENCIA_IA,
+            maximo_tentativas_ia: MAXIMO_TENTATIVAS_IA,
+            modelo_fallback: MODELO_FALLBACK
           },
           debug: {
             tem_AI: Boolean(env.AI),
@@ -385,6 +403,7 @@ async function analisarEdital(request, env) {
     }
 
     const textoLimpo = limparTextoEdital(textoOriginal);
+
     const textoUtil = textoLimpo
       .slice(0, LIMITE_TEXTO_TOTAL)
       .trim();
@@ -438,8 +457,11 @@ async function analisarEdital(request, env) {
       );
     }
 
-    const normalizado = normalizarEditalMulticargos(resultado);
-    const hash = await gerarHashTexto(textoUtil);
+    const normalizado =
+      normalizarEditalMulticargos(resultado);
+
+    const hash =
+      await gerarHashTexto(textoUtil);
 
     return json({
       ok: true,
@@ -449,27 +471,37 @@ async function analisarEdital(request, env) {
       arquivo: {
         nome: nomeArquivo || null,
         tipo: tipoArquivo || null,
-        caracteres_recebidos: textoOriginal.length,
-        caracteres_analisados: textoUtil.length,
-        texto_cortado: textoLimpo.length > LIMITE_TEXTO_TOTAL,
+        caracteres_recebidos:
+          textoOriginal.length,
+        caracteres_analisados:
+          textoUtil.length,
+        texto_cortado:
+          textoLimpo.length >
+          LIMITE_TEXTO_TOTAL,
         hash
       },
       processamento: {
         modo,
         blocos: blocosUsados,
-        duracao_ms: Date.now() - inicio
+        duracao_ms:
+          Date.now() - inicio
       },
       modelo: MODELO_EXTRACAO
     });
   } catch (error) {
-    console.error("Erro ao analisar edital:", error);
+    console.error(
+      "Erro ao analisar edital:",
+      error
+    );
 
     return json(
       {
         ok: false,
-        erro: obterMensagemErro(error),
+        erro:
+          normalizarErroWorkersAI(error),
         modelo: MODELO_EXTRACAO,
-        duracao_ms: Date.now() - inicio
+        duracao_ms:
+          Date.now() - inicio
       },
       500
     );
@@ -518,15 +550,18 @@ TEXTO DO EDITAL:
 ${texto}
 `;
 
-  const resposta = await executarJsonSchema(
-    env,
-    prompt,
-    ESQUEMA_EDITAL_MULTICARGOS,
-    "edital_multicargos",
-    7600
-  );
+  const resposta =
+    await executarJsonSchema(
+      env,
+      prompt,
+      ESQUEMA_EDITAL_MULTICARGOS,
+      "edital_multicargos",
+      4200
+    );
 
-  return interpretarRespostaDaIa(resposta);
+  return interpretarRespostaDaIa(
+    resposta
+  );
 }
 
 async function analisarDocumentoExtenso(
@@ -538,34 +573,57 @@ async function analisarDocumentoExtenso(
     tipoArquivo
   }
 ) {
-  const trechoInicial = textoCompleto.slice(0, 16000);
+  const trechoInicial =
+    textoCompleto.slice(0, 14000);
 
-  const promessaMetadados = extrairMetadados(
-    env,
-    {
-      texto: trechoInicial,
-      nomeArquivo,
-      tipoArquivo
-    }
-  );
+  const promessaMetadados =
+    extrairMetadados(
+      env,
+      {
+        texto: trechoInicial,
+        nomeArquivo,
+        tipoArquivo
+      }
+    );
 
   const tarefas = blocos.map(
     (bloco, indice) =>
-      async () =>
-        analisarBlocoDeCargos(
-          env,
-          {
-            bloco,
-            indice,
-            total: blocos.length
-          }
-        )
+      async () => {
+        try {
+          return await analisarBlocoDeCargos(
+            env,
+            {
+              bloco,
+              indice,
+              total: blocos.length
+            }
+          );
+        } catch (error) {
+          console.warn(
+            `O bloco ${indice + 1} de ${blocos.length} ` +
+            "não pôde ser analisado:",
+            obterMensagemErro(error)
+          );
+
+          /*
+           * Um bloco defeituoso não encerra os demais.
+           */
+          return {
+            cargos: [],
+            erro_bloco:
+              normalizarErroWorkersAI(
+                error
+              )
+          };
+        }
+      }
   );
 
-  const promessaBlocos = executarEmLotes(
-    tarefas,
-    CONCORRENCIA_IA
-  );
+  const promessaBlocos =
+    executarEmLotes(
+      tarefas,
+      CONCORRENCIA_IA
+    );
 
   const [
     metadados,
@@ -575,14 +633,16 @@ async function analisarDocumentoExtenso(
     promessaBlocos
   ]);
 
-  const cargosBrutos = resultadosBlocos.flatMap(
-    item =>
-      Array.isArray(item?.cargos)
-        ? item.cargos
-        : []
-  );
+  const cargosBrutos =
+    resultadosBlocos.flatMap(
+      item =>
+        Array.isArray(item?.cargos)
+          ? item.cargos
+          : []
+    );
 
-  const cargos = consolidarCargos(cargosBrutos);
+  const cargos =
+    consolidarCargos(cargosBrutos);
 
   if (!cargos.length) {
     throw new Error(
@@ -591,11 +651,16 @@ async function analisarDocumentoExtenso(
   }
 
   return {
-    concurso: metadados.concurso || {},
+    concurso:
+      metadados.concurso || {},
     cargos,
     estrategia:
-      textoSeguro(metadados.estrategia) ||
-      criarEstrategiaMulticargos(cargos)
+      textoSeguro(
+        metadados.estrategia
+      ) ||
+      criarEstrategiaMulticargos(
+        cargos
+      )
   };
 }
 
@@ -622,15 +687,18 @@ TEXTO:
 ${texto}
 `;
 
-  const resposta = await executarJsonSchema(
-    env,
-    prompt,
-    ESQUEMA_METADADOS,
-    "metadados_concurso",
-    1600
-  );
+  const resposta =
+    await executarJsonSchema(
+      env,
+      prompt,
+      ESQUEMA_METADADOS,
+      "metadados_concurso",
+      1200
+    );
 
-  return interpretarRespostaDaIa(resposta);
+  return interpretarRespostaDaIa(
+    resposta
+  );
 }
 
 async function analisarBlocoDeCargos(
@@ -662,20 +730,27 @@ BLOCO:
 ${bloco}
 `;
 
-  const resposta = await executarJsonSchema(
-    env,
-    prompt,
-    ESQUEMA_BLOCO_CARGOS,
-    `bloco_cargos_${indice + 1}`,
-    5600
-  );
+  const resposta =
+    await executarJsonSchema(
+      env,
+      prompt,
+      ESQUEMA_BLOCO_CARGOS,
+      `bloco_cargos_${indice + 1}`,
+      3200
+    );
 
-  const interpretado = interpretarRespostaDaIa(resposta);
+  const interpretado =
+    interpretarRespostaDaIa(
+      resposta
+    );
 
   return {
-    cargos: Array.isArray(interpretado?.cargos)
-      ? interpretado.cargos
-      : []
+    cargos:
+      Array.isArray(
+        interpretado?.cargos
+      )
+        ? interpretado.cargos
+        : []
   };
 }
 
@@ -688,38 +763,229 @@ async function executarJsonSchema(
 ) {
   validarBindingAI(env);
 
-  return env.AI.run(
+  const modelos = [
     MODELO_EXTRACAO,
-    {
-      messages: [
-        {
-          role: "system",
-          content:
-            "Retorne somente JSON válido conforme o schema. " +
-            "Não use markdown, comentários ou texto fora do JSON."
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: nomeSchema,
-          strict: true,
-          schema
-        }
+    MODELO_FALLBACK
+  ];
+
+  let ultimoErro = null;
+
+  for (
+    let tentativa = 1;
+    tentativa <= MAXIMO_TENTATIVAS_IA;
+    tentativa += 1
+  ) {
+    const modelo =
+      modelos[
+        Math.min(
+          tentativa - 1,
+          modelos.length - 1
+        )
+      ];
+
+    try {
+      const resultado =
+        await executarChamadaIa(
+          env,
+          {
+            modelo,
+            prompt,
+            schema,
+            nomeSchema,
+            maxTokens
+          }
+        );
+
+      /*
+       * Valida a resposta ainda dentro da tentativa.
+       * JSON vazio ou interrompido também ativa a repetição.
+       */
+      interpretarRespostaDaIa(
+        resultado
+      );
+
+      return resultado;
+    } catch (error) {
+      ultimoErro = error;
+
+      const mensagem =
+        obterMensagemErro(error);
+
+      console.warn(
+        `Falha na IA. Tentativa ${tentativa} de ` +
+        `${MAXIMO_TENTATIVAS_IA}. Modelo: ${modelo}.`,
+        mensagem
+      );
+
+      if (
+        tentativa <
+        MAXIMO_TENTATIVAS_IA
+      ) {
+        await esperar(
+          ESPERA_REPETICAO_MS *
+          tentativa
+        );
+      }
+    }
+  }
+
+  throw new Error(
+    normalizarErroWorkersAI(
+      ultimoErro
+    )
+  );
+}
+
+async function executarChamadaIa(
+  env,
+  {
+    modelo,
+    prompt,
+    schema,
+    nomeSchema,
+    maxTokens
+  }
+) {
+  const configuracaoBase = {
+    messages: [
+      {
+        role: "system",
+        content:
+          "Retorne somente JSON válido conforme o schema. " +
+          "Não use markdown, comentários ou texto fora do JSON. " +
+          "Se o trecho não possuir dados úteis, retorne arrays vazios."
       },
-      max_completion_tokens: maxTokens,
-      temperature: 0
+      {
+        role: "user",
+        content: prompt
+      }
+    ],
+
+    response_format: {
+      type: "json_schema",
+
+      json_schema: {
+        name: nomeSchema,
+        strict: true,
+        schema
+      }
+    },
+
+    temperature: 0
+  };
+
+  /*
+   * O GLM usa max_completion_tokens.
+   * O Llama da Workers AI é mais estável com max_tokens.
+   */
+  if (modelo.includes("glm")) {
+    return env.AI.run(
+      modelo,
+      {
+        ...configuracaoBase,
+        max_completion_tokens:
+          maxTokens,
+        reasoning_effort: "low"
+      }
+    );
+  }
+
+  return env.AI.run(
+    modelo,
+    {
+      ...configuracaoBase,
+      max_tokens: maxTokens
     }
   );
 }
 
-function interpretarRespostaDaIa(resposta) {
+function normalizarErroWorkersAI(
+  error
+) {
+  const mensagem =
+    obterMensagemErro(error);
+
+  const mensagemLower =
+    mensagem.toLowerCase();
+
+  if (
+    mensagemLower.includes(
+      "content-length header"
+    ) ||
+    mensagemLower.includes(
+      "exceeds body"
+    )
+  ) {
+    return (
+      "A resposta da IA foi interrompida pela infraestrutura da Cloudflare. " +
+      "O sistema realizou novas tentativas, mas não recebeu uma resposta completa. " +
+      "Tente novamente; se persistir, envie um edital menor ou em formato TXT."
+    );
+  }
+
+  if (
+    mensagemLower.includes(
+      "timeout"
+    ) ||
+    mensagemLower.includes(
+      "timed out"
+    )
+  ) {
+    return (
+      "A análise ultrapassou o tempo disponível da Cloudflare. " +
+      "O documento pode ser extenso demais para uma única execução."
+    );
+  }
+
+  if (
+    mensagemLower.includes(
+      "rate limit"
+    ) ||
+    mensagemLower.includes(
+      "too many requests"
+    ) ||
+    mensagemLower.includes("429")
+  ) {
+    return (
+      "O limite momentâneo da IA da Cloudflare foi atingido. " +
+      "Aguarde alguns instantes e tente novamente."
+    );
+  }
+
+  if (
+    mensagemLower.includes("json") ||
+    mensagemLower.includes("parse")
+  ) {
+    return (
+      "A IA respondeu, mas o JSON veio incompleto ou inválido. " +
+      "O sistema tentou novamente sem conseguir concluir a estrutura."
+    );
+  }
+
+  return (
+    mensagem ||
+    "A Workers AI não conseguiu concluir a análise."
+  );
+}
+
+function esperar(
+  milissegundos
+) {
+  return new Promise(resolve => {
+    setTimeout(
+      resolve,
+      milissegundos
+    );
+  });
+}
+
+function interpretarRespostaDaIa(
+  resposta
+) {
   if (!resposta) {
-    throw new Error("A IA retornou uma resposta vazia.");
+    throw new Error(
+      "A IA retornou uma resposta vazia."
+    );
   }
 
   const candidatos = [
@@ -727,11 +993,15 @@ function interpretarRespostaDaIa(resposta) {
     resposta.result,
     resposta.response,
     resposta.output,
-    resposta?.choices?.[0]?.message?.parsed,
-    resposta?.choices?.[0]?.message?.content
+    resposta?.choices?.[0]
+      ?.message?.parsed,
+    resposta?.choices?.[0]
+      ?.message?.content
   ];
 
-  for (const candidato of candidatos) {
+  for (
+    const candidato of candidatos
+  ) {
     if (
       candidato &&
       typeof candidato === "object" &&
@@ -744,7 +1014,8 @@ function interpretarRespostaDaIa(resposta) {
       typeof candidato === "string" &&
       candidato.trim()
     ) {
-      const objeto = extrairJson(candidato);
+      const objeto =
+        extrairJson(candidato);
 
       if (objeto) {
         return objeto;
@@ -757,9 +1028,12 @@ function interpretarRespostaDaIa(resposta) {
   );
 }
 
-function extrairConteudoResposta(resposta) {
+function extrairConteudoResposta(
+  resposta
+) {
   return (
-    resposta?.choices?.[0]?.message?.content ||
+    resposta?.choices?.[0]
+      ?.message?.content ||
     resposta?.response ||
     resposta?.result ||
     resposta?.output ||
@@ -768,7 +1042,8 @@ function extrairConteudoResposta(resposta) {
 }
 
 function extrairJson(texto) {
-  const bruto = String(texto || "").trim();
+  const bruto =
+    String(texto || "").trim();
 
   if (!bruto) {
     return null;
@@ -779,22 +1054,42 @@ function extrairJson(texto) {
   } catch (_) {}
 
   const semMarkdown = bruto
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```$/i, "")
+    .replace(
+      /^```json\s*/i,
+      ""
+    )
+    .replace(
+      /^```\s*/i,
+      ""
+    )
+    .replace(
+      /```$/i,
+      ""
+    )
     .trim();
 
   try {
-    return JSON.parse(semMarkdown);
+    return JSON.parse(
+      semMarkdown
+    );
   } catch (_) {}
 
-  const inicio = semMarkdown.indexOf("{");
-  const fim = semMarkdown.lastIndexOf("}");
+  const inicio =
+    semMarkdown.indexOf("{");
 
-  if (inicio >= 0 && fim > inicio) {
+  const fim =
+    semMarkdown.lastIndexOf("}");
+
+  if (
+    inicio >= 0 &&
+    fim > inicio
+  ) {
     try {
       return JSON.parse(
-        semMarkdown.slice(inicio, fim + 1)
+        semMarkdown.slice(
+          inicio,
+          fim + 1
+        )
       );
     } catch (_) {}
   }
@@ -802,16 +1097,22 @@ function extrairJson(texto) {
   return null;
 }
 
-function normalizarEditalMulticargos(resultado) {
+function normalizarEditalMulticargos(
+  resultado
+) {
   const concursoBruto =
     resultado?.concurso &&
-    typeof resultado.concurso === "object"
+    typeof resultado.concurso ===
+      "object"
       ? resultado.concurso
       : {};
 
-  let cargosBrutos = Array.isArray(resultado?.cargos)
-    ? resultado.cargos
-    : [];
+  let cargosBrutos =
+    Array.isArray(
+      resultado?.cargos
+    )
+      ? resultado.cargos
+      : [];
 
   /*
    * Compatibilidade com respostas antigas que possuíam apenas
@@ -819,24 +1120,32 @@ function normalizarEditalMulticargos(resultado) {
    */
   if (
     !cargosBrutos.length &&
-    Array.isArray(resultado?.disciplinas)
+    Array.isArray(
+      resultado?.disciplinas
+    )
   ) {
     cargosBrutos = [
       {
         codigo: "",
         nome:
-          textoSeguro(concursoBruto.cargo) ||
+          textoSeguro(
+            concursoBruto.cargo
+          ) ||
           "Cargo não identificado",
         especialidade: "",
         nivel: "",
         requisitos: "",
         vagas: null,
-        disciplinas: resultado.disciplinas
+        disciplinas:
+          resultado.disciplinas
       }
     ];
   }
 
-  const cargos = consolidarCargos(cargosBrutos);
+  const cargos =
+    consolidarCargos(
+      cargosBrutos
+    );
 
   if (!cargos.length) {
     throw new Error(
@@ -847,141 +1156,225 @@ function normalizarEditalMulticargos(resultado) {
   return {
     concurso: {
       nome:
-        textoSeguro(concursoBruto.nome) ||
+        textoSeguro(
+          concursoBruto.nome
+        ) ||
         "Concurso importado por IA",
+
       orgao:
-        textoSeguro(concursoBruto.orgao),
+        textoSeguro(
+          concursoBruto.orgao
+        ),
+
       banca:
-        textoSeguro(concursoBruto.banca),
+        textoSeguro(
+          concursoBruto.banca
+        ),
+
       numero_edital:
         textoSeguro(
           concursoBruto.numero_edital ||
           concursoBruto.numero
         ),
+
       data_prova:
         normalizarData(
           concursoBruto.data_prova ||
           concursoBruto.prova
         )
     },
+
     cargos,
+
     estrategia:
-      textoSeguro(resultado?.estrategia) ||
-      criarEstrategiaMulticargos(cargos)
+      textoSeguro(
+        resultado?.estrategia
+      ) ||
+      criarEstrategiaMulticargos(
+        cargos
+      )
   };
 }
 
-function consolidarCargos(cargosBrutos) {
+function consolidarCargos(
+  cargosBrutos
+) {
   const mapa = new Map();
 
-  for (const cargoBruto of cargosBrutos || []) {
-    if (!cargoBruto || typeof cargoBruto !== "object") {
+  for (
+    const cargoBruto of
+    cargosBrutos || []
+  ) {
+    if (
+      !cargoBruto ||
+      typeof cargoBruto !==
+        "object"
+    ) {
       continue;
     }
 
-    const nome = textoSeguro(
-      cargoBruto.nome ||
-      cargoBruto.cargo
-    );
+    const nome =
+      textoSeguro(
+        cargoBruto.nome ||
+        cargoBruto.cargo
+      );
 
-    const especialidade = textoSeguro(
-      cargoBruto.especialidade ||
-      cargoBruto.area
-    );
+    const especialidade =
+      textoSeguro(
+        cargoBruto.especialidade ||
+        cargoBruto.area
+      );
 
-    if (!nome && !especialidade) {
+    if (
+      !nome &&
+      !especialidade
+    ) {
       continue;
     }
 
-    const chave = normalizarChave(
-      `${nome}|${especialidade}`
-    );
+    const chave =
+      normalizarChave(
+        `${nome}|${especialidade}`
+      );
 
     if (!chave) {
       continue;
     }
 
-    const disciplinas = consolidarDisciplinas(
-      cargoBruto.disciplinas
-    );
+    const disciplinas =
+      consolidarDisciplinas(
+        cargoBruto.disciplinas
+      );
 
     if (!mapa.has(chave)) {
-      mapa.set(chave, {
-        codigo: textoSeguro(cargoBruto.codigo),
-        nome: nome || especialidade,
-        especialidade:
-          especialidade &&
-          normalizarChave(especialidade) !== normalizarChave(nome)
-            ? especialidade
-            : "",
-        nivel: textoSeguro(cargoBruto.nivel),
-        requisitos: textoSeguro(cargoBruto.requisitos),
-        vagas: normalizarInteiroOuNull(cargoBruto.vagas),
-        disciplinas
-      });
+      mapa.set(
+        chave,
+        {
+          codigo:
+            textoSeguro(
+              cargoBruto.codigo
+            ),
+
+          nome:
+            nome ||
+            especialidade,
+
+          especialidade:
+            especialidade &&
+            normalizarChave(
+              especialidade
+            ) !==
+              normalizarChave(nome)
+              ? especialidade
+              : "",
+
+          nivel:
+            textoSeguro(
+              cargoBruto.nivel
+            ),
+
+          requisitos:
+            textoSeguro(
+              cargoBruto.requisitos
+            ),
+
+          vagas:
+            normalizarInteiroOuNull(
+              cargoBruto.vagas
+            ),
+
+          disciplinas
+        }
+      );
 
       continue;
     }
 
-    const existente = mapa.get(chave);
+    const existente =
+      mapa.get(chave);
 
     existente.codigo =
       existente.codigo ||
-      textoSeguro(cargoBruto.codigo);
+      textoSeguro(
+        cargoBruto.codigo
+      );
 
     existente.nivel =
       existente.nivel ||
-      textoSeguro(cargoBruto.nivel);
+      textoSeguro(
+        cargoBruto.nivel
+      );
 
     existente.requisitos =
       existente.requisitos ||
-      textoSeguro(cargoBruto.requisitos);
+      textoSeguro(
+        cargoBruto.requisitos
+      );
 
     existente.vagas =
       existente.vagas ??
-      normalizarInteiroOuNull(cargoBruto.vagas);
+      normalizarInteiroOuNull(
+        cargoBruto.vagas
+      );
 
-    existente.disciplinas = consolidarDisciplinas([
-      ...existente.disciplinas,
-      ...disciplinas
-    ]);
+    existente.disciplinas =
+      consolidarDisciplinas([
+        ...existente.disciplinas,
+        ...disciplinas
+      ]);
   }
 
-  return Array.from(mapa.values())
-    .filter(cargo => cargo.disciplinas.length)
-    .sort((a, b) =>
-      `${a.nome} ${a.especialidade}`.localeCompare(
-        `${b.nome} ${b.especialidade}`,
-        "pt-BR"
-      )
+  return Array
+    .from(mapa.values())
+    .filter(
+      cargo =>
+        cargo.disciplinas.length
+    )
+    .sort(
+      (a, b) =>
+        `${a.nome} ${a.especialidade}`
+          .localeCompare(
+            `${b.nome} ${b.especialidade}`,
+            "pt-BR"
+          )
     );
 }
 
-function consolidarDisciplinas(disciplinasBrutas) {
+function consolidarDisciplinas(
+  disciplinasBrutas
+) {
   const mapa = new Map();
 
-  for (const disciplinaBruta of disciplinasBrutas || []) {
+  for (
+    const disciplinaBruta of
+    disciplinasBrutas || []
+  ) {
     if (!disciplinaBruta) {
       continue;
     }
 
-    const nome = textoSeguro(
-      typeof disciplinaBruta === "string"
-        ? disciplinaBruta
-        : disciplinaBruta.nome
-    );
+    const nome =
+      textoSeguro(
+        typeof disciplinaBruta ===
+          "string"
+          ? disciplinaBruta
+          : disciplinaBruta.nome
+      );
 
     if (!nome) {
       continue;
     }
 
-    const chave = normalizarChave(nome);
+    const chave =
+      normalizarChave(nome);
 
-    const topicos = normalizarTopicos(
-      typeof disciplinaBruta === "object"
-        ? disciplinaBruta.topicos
-        : []
-    );
+    const topicos =
+      normalizarTopicos(
+        typeof disciplinaBruta ===
+          "object"
+          ? disciplinaBruta.topicos
+          : []
+      );
 
     if (!topicos.length) {
       continue;
@@ -989,110 +1382,161 @@ function consolidarDisciplinas(disciplinasBrutas) {
 
     const disciplina = {
       nome,
+
       grupo:
-        textoSeguro(disciplinaBruta.grupo) ||
+        textoSeguro(
+          disciplinaBruta.grupo
+        ) ||
         "Conteúdo programático",
-      prioridade: normalizarPrioridade(
-        disciplinaBruta.prioridade
-      ),
-      peso: normalizarPeso(
-        disciplinaBruta.peso
-      ),
-      quantidade_questoes: normalizarInteiroOuNull(
-        disciplinaBruta.quantidade_questoes ||
-        disciplinaBruta.numero_questoes
-      ),
+
+      prioridade:
+        normalizarPrioridade(
+          disciplinaBruta.prioridade
+        ),
+
+      peso:
+        normalizarPeso(
+          disciplinaBruta.peso
+        ),
+
+      quantidade_questoes:
+        normalizarInteiroOuNull(
+          disciplinaBruta
+            .quantidade_questoes ||
+          disciplinaBruta
+            .numero_questoes
+        ),
+
       topicos
     };
 
     if (!mapa.has(chave)) {
-      mapa.set(chave, disciplina);
+      mapa.set(
+        chave,
+        disciplina
+      );
       continue;
     }
 
-    const existente = mapa.get(chave);
+    const existente =
+      mapa.get(chave);
 
     existente.grupo =
-      existente.grupo !== "Conteúdo programático"
+      existente.grupo !==
+      "Conteúdo programático"
         ? existente.grupo
         : disciplina.grupo;
 
-    existente.prioridade = maiorPrioridade(
-      existente.prioridade,
-      disciplina.prioridade
-    );
+    existente.prioridade =
+      maiorPrioridade(
+        existente.prioridade,
+        disciplina.prioridade
+      );
 
-    existente.peso = Math.max(
-      existente.peso,
-      disciplina.peso
-    );
+    existente.peso =
+      Math.max(
+        existente.peso,
+        disciplina.peso
+      );
 
     existente.quantidade_questoes =
-      existente.quantidade_questoes ??
-      disciplina.quantidade_questoes;
+      existente
+        .quantidade_questoes ??
+      disciplina
+        .quantidade_questoes;
 
-    existente.topicos = normalizarTopicos([
-      ...existente.topicos,
-      ...disciplina.topicos
-    ]);
+    existente.topicos =
+      normalizarTopicos([
+        ...existente.topicos,
+        ...disciplina.topicos
+      ]);
   }
 
-  return Array.from(mapa.values());
+  return Array.from(
+    mapa.values()
+  );
 }
 
-function normalizarTopicos(topicosBrutos) {
+function normalizarTopicos(
+  topicosBrutos
+) {
   const mapa = new Map();
 
-  for (const topicoBruto of topicosBrutos || []) {
-    const nome = textoSeguro(
-      typeof topicoBruto === "string"
-        ? topicoBruto
-        : topicoBruto?.nome
-    );
+  for (
+    const topicoBruto of
+    topicosBrutos || []
+  ) {
+    const nome =
+      textoSeguro(
+        typeof topicoBruto ===
+          "string"
+          ? topicoBruto
+          : topicoBruto?.nome
+      );
 
     if (!nome) {
       continue;
     }
 
-    const chave = normalizarChave(nome);
+    const chave =
+      normalizarChave(nome);
 
-    if (!chave || mapa.has(chave)) {
+    if (
+      !chave ||
+      mapa.has(chave)
+    ) {
       continue;
     }
 
-    mapa.set(chave, {
-      nome,
-      status:
-        topicoBruto?.status === "concluido"
-          ? "concluido"
-          : "pendente"
-    });
+    mapa.set(
+      chave,
+      {
+        nome,
+
+        status:
+          topicoBruto?.status ===
+          "concluido"
+            ? "concluido"
+            : "pendente"
+      }
+    );
   }
 
-  return Array.from(mapa.values());
+  return Array.from(
+    mapa.values()
+  );
 }
 
-async function salvarEdital(request, env) {
+async function salvarEdital(
+  request,
+  env
+) {
   try {
     validarSupabase(env);
 
-    const body = await lerJsonRequest(request);
+    const body =
+      await lerJsonRequest(
+        request
+      );
 
-    const userId = textoSeguro(
-      body.user_id ||
-      body.userId
-    );
+    const userId =
+      textoSeguro(
+        body.user_id ||
+        body.userId
+      );
 
-    const concursoId = textoSeguro(
-      body.concurso_id ||
-      body.concursoId
-    );
+    const concursoId =
+      textoSeguro(
+        body.concurso_id ||
+        body.concursoId
+      );
 
     if (!userId) {
       return json(
         {
           ok: false,
-          erro: "O campo user_id é obrigatório."
+          erro:
+            "O campo user_id é obrigatório."
         },
         400
       );
@@ -1102,7 +1546,8 @@ async function salvarEdital(request, env) {
       return json(
         {
           ok: false,
-          erro: "O campo concurso_id é obrigatório."
+          erro:
+            "O campo concurso_id é obrigatório."
         },
         400
       );
@@ -1114,21 +1559,31 @@ async function salvarEdital(request, env) {
       body.resposta ||
       body;
 
-    const dados = normalizarParaSalvamento(fonte);
+    const dados =
+      normalizarParaSalvamento(
+        fonte
+      );
 
-    const resultado = await supabaseRpc(
-      env,
-      "salvar_edital_verticalizado",
-      {
-        p_user_id: userId,
-        p_concurso_id: concursoId,
-        p_dados: dados
-      }
-    );
+    const resultado =
+      await supabaseRpc(
+        env,
+        "salvar_edital_verticalizado",
+        {
+          p_user_id:
+            userId,
+
+          p_concurso_id:
+            concursoId,
+
+          p_dados:
+            dados
+        }
+      );
 
     const retorno =
       resultado &&
-      typeof resultado === "object" &&
+      typeof resultado ===
+        "object" &&
       !Array.isArray(resultado)
         ? resultado
         : {
@@ -1136,36 +1591,55 @@ async function salvarEdital(request, env) {
           };
 
     return json({
-      ok: retorno.ok !== false,
+      ok:
+        retorno.ok !== false,
+
       mensagem:
         retorno.mensagem ||
         "Edital verticalizado salvo com sucesso.",
+
       concurso_id:
         retorno.concurso_id ||
         concursoId,
+
       disciplinas_salvas:
-        retorno.disciplinas_salvas ??
+        retorno
+          .disciplinas_salvas ??
         dados.disciplinas.length,
+
       topicos_salvos:
         retorno.topicos_salvos ??
-        contarTopicos(dados.disciplinas),
-      resultado: retorno
+        contarTopicos(
+          dados.disciplinas
+        ),
+
+      resultado:
+        retorno
     });
   } catch (error) {
-    console.error("Erro ao salvar edital:", error);
+    console.error(
+      "Erro ao salvar edital:",
+      error
+    );
 
     return json(
       {
         ok: false,
-        erro: obterMensagemErro(error)
+        erro:
+          obterMensagemErro(error)
       },
       500
     );
   }
 }
 
-function normalizarParaSalvamento(fonte) {
-  if (!fonte || typeof fonte !== "object") {
+function normalizarParaSalvamento(
+  fonte
+) {
+  if (
+    !fonte ||
+    typeof fonte !== "object"
+  ) {
     throw new Error(
       "Os dados enviados para salvamento são inválidos."
     );
@@ -1177,11 +1651,14 @@ function normalizarParaSalvamento(fonte) {
    */
   if (
     fonte.concurso &&
-    Array.isArray(fonte.disciplinas)
-  ) {
-    const disciplinas = consolidarDisciplinas(
+    Array.isArray(
       fonte.disciplinas
-    );
+    )
+  ) {
+    const disciplinas =
+      consolidarDisciplinas(
+        fonte.disciplinas
+      );
 
     if (!disciplinas.length) {
       throw new Error(
@@ -1192,20 +1669,43 @@ function normalizarParaSalvamento(fonte) {
     return {
       concurso: {
         nome:
-          textoSeguro(fonte.concurso.nome) ||
+          textoSeguro(
+            fonte.concurso.nome
+          ) ||
           "Concurso importado por IA",
-        orgao: textoSeguro(fonte.concurso.orgao),
-        cargo: textoSeguro(fonte.concurso.cargo),
-        banca: textoSeguro(fonte.concurso.banca),
-        data_prova: normalizarData(
-          fonte.concurso.data_prova ||
-          fonte.concurso.prova
-        )
+
+        orgao:
+          textoSeguro(
+            fonte.concurso.orgao
+          ),
+
+        cargo:
+          textoSeguro(
+            fonte.concurso.cargo
+          ),
+
+        banca:
+          textoSeguro(
+            fonte.concurso.banca
+          ),
+
+        data_prova:
+          normalizarData(
+            fonte.concurso
+              .data_prova ||
+            fonte.concurso.prova
+          )
       },
+
       disciplinas,
+
       estrategia:
-        textoSeguro(fonte.estrategia) ||
-        criarEstrategiaDisciplinas(disciplinas)
+        textoSeguro(
+          fonte.estrategia
+        ) ||
+        criarEstrategiaDisciplinas(
+          disciplinas
+        )
     };
   }
 
@@ -1213,27 +1713,51 @@ function normalizarParaSalvamento(fonte) {
    * Segurança adicional: aceita o edital multicargos somente
    * quando houver exatamente um cargo.
    */
-  if (Array.isArray(fonte.cargos)) {
-    const edital = normalizarEditalMulticargos(fonte);
+  if (
+    Array.isArray(
+      fonte.cargos
+    )
+  ) {
+    const edital =
+      normalizarEditalMulticargos(
+        fonte
+      );
 
-    if (edital.cargos.length !== 1) {
+    if (
+      edital.cargos.length !== 1
+    ) {
       throw new Error(
         "Selecione um cargo antes de salvar o edital."
       );
     }
 
-    const cargo = edital.cargos[0];
+    const cargo =
+      edital.cargos[0];
 
     return {
       concurso: {
-        nome: edital.concurso.nome,
-        orgao: edital.concurso.orgao,
-        cargo: montarNomeCargo(cargo),
-        banca: edital.concurso.banca,
-        data_prova: edital.concurso.data_prova
+        nome:
+          edital.concurso.nome,
+
+        orgao:
+          edital.concurso.orgao,
+
+        cargo:
+          montarNomeCargo(cargo),
+
+        banca:
+          edital.concurso.banca,
+
+        data_prova:
+          edital.concurso
+            .data_prova
       },
-      disciplinas: cargo.disciplinas,
-      estrategia: edital.estrategia
+
+      disciplinas:
+        cargo.disciplinas,
+
+      estrategia:
+        edital.estrategia
     };
   }
 
@@ -1253,21 +1777,35 @@ async function supabaseRpc(
   let response;
 
   try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        ...supabaseHeaders(env),
-        Prefer: "return=representation"
-      },
-      body: JSON.stringify(parametros)
-    });
+    response = await fetch(
+      endpoint,
+      {
+        method: "POST",
+
+        headers: {
+          ...supabaseHeaders(env),
+          Prefer:
+            "return=representation"
+        },
+
+        body:
+          JSON.stringify(
+            parametros
+          )
+      }
+    );
   } catch (error) {
     throw new Error(
-      `Falha de rede ao acessar o Supabase: ${obterMensagemErro(error)}`
+      `Falha de rede ao acessar o Supabase: ${
+        obterMensagemErro(error)
+      }`
     );
   }
 
-  const data = await lerRespostaHttp(response);
+  const data =
+    await lerRespostaHttp(
+      response
+    );
 
   if (!response.ok) {
     throw new Error(
@@ -1282,8 +1820,11 @@ async function supabaseRpc(
   return data;
 }
 
-async function lerRespostaHttp(response) {
-  const texto = await response.text();
+async function lerRespostaHttp(
+  response
+) {
+  const texto =
+    await response.text();
 
   if (!texto) {
     return null;
@@ -1316,17 +1857,42 @@ function dividirTextoEmBlocos(
 
     if (fim < texto.length) {
       const candidatos = [
-        texto.lastIndexOf("\n\n", fim),
-        texto.lastIndexOf("\n", fim),
-        texto.lastIndexOf(". ", fim)
-      ].filter(posicao => posicao > inicio + tamanho * 0.65);
+        texto.lastIndexOf(
+          "\n\n",
+          fim
+        ),
+
+        texto.lastIndexOf(
+          "\n",
+          fim
+        ),
+
+        texto.lastIndexOf(
+          ". ",
+          fim
+        )
+      ].filter(
+        posicao =>
+          posicao >
+          inicio +
+          tamanho * 0.65
+      );
 
       if (candidatos.length) {
-        fim = Math.max(...candidatos) + 1;
+        fim =
+          Math.max(
+            ...candidatos
+          ) + 1;
       }
     }
 
-    const bloco = texto.slice(inicio, fim).trim();
+    const bloco =
+      texto
+        .slice(
+          inicio,
+          fim
+        )
+        .trim();
 
     if (bloco) {
       blocos.push(bloco);
@@ -1336,10 +1902,11 @@ function dividirTextoEmBlocos(
       break;
     }
 
-    inicio = Math.max(
-      fim - sobreposicao,
-      inicio + 1
-    );
+    inicio =
+      Math.max(
+        fim - sobreposicao,
+        inicio + 1
+      );
   }
 
   return blocos;
@@ -1349,30 +1916,43 @@ async function executarEmLotes(
   tarefas,
   concorrencia
 ) {
-  const resultados = new Array(tarefas.length);
+  const resultados =
+    new Array(
+      tarefas.length
+    );
+
   let proximo = 0;
 
   async function executar() {
     while (true) {
-      const indice = proximo;
+      const indice =
+        proximo;
+
       proximo += 1;
 
-      if (indice >= tarefas.length) {
+      if (
+        indice >=
+        tarefas.length
+      ) {
         return;
       }
 
-      resultados[indice] = await tarefas[indice]();
+      resultados[indice] =
+        await tarefas[indice]();
     }
   }
 
-  const quantidade = Math.min(
-    concorrencia,
-    tarefas.length
-  );
+  const quantidade =
+    Math.min(
+      concorrencia,
+      tarefas.length
+    );
 
   await Promise.all(
     Array.from(
-      { length: quantidade },
+      {
+        length: quantidade
+      },
       () => executar()
     )
   );
@@ -1380,18 +1960,38 @@ async function executarEmLotes(
   return resultados;
 }
 
-function limparTextoEdital(texto) {
+function limparTextoEdital(
+  texto
+) {
   return String(texto || "")
-    .replace(/\u0000/g, "")
-    .replace(/\r/g, "\n")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n[ \t]+/g, "\n")
-    .replace(/\n{4,}/g, "\n\n\n")
+    .replace(
+      /\u0000/g,
+      ""
+    )
+    .replace(
+      /\r/g,
+      "\n"
+    )
+    .replace(
+      /[ \t]+/g,
+      " "
+    )
+    .replace(
+      /\n[ \t]+/g,
+      "\n"
+    )
+    .replace(
+      /\n{4,}/g,
+      "\n\n\n"
+    )
     .trim();
 }
 
-function criarEstrategiaMulticargos(cargos) {
-  const totalCargos = cargos.length;
+function criarEstrategiaMulticargos(
+  cargos
+) {
+  const totalCargos =
+    cargos.length;
 
   return (
     `Foram identificados ${totalCargos} cargo(s). ` +
@@ -1401,7 +2001,9 @@ function criarEstrategiaMulticargos(cargos) {
   );
 }
 
-function criarEstrategiaDisciplinas(disciplinas) {
+function criarEstrategiaDisciplinas(
+  disciplinas
+) {
   return (
     "Estude por ciclos, priorizando as disciplinas de maior peso, " +
     "resolva questões após cada bloco teórico e programe revisões " +
@@ -1409,40 +2011,68 @@ function criarEstrategiaDisciplinas(disciplinas) {
   );
 }
 
-function contarTopicos(disciplinas) {
-  return (disciplinas || []).reduce(
-    (total, disciplina) =>
+function contarTopicos(
+  disciplinas
+) {
+  return (
+    disciplinas || []
+  ).reduce(
+    (
+      total,
+      disciplina
+    ) =>
       total +
-      (Array.isArray(disciplina.topicos)
-        ? disciplina.topicos.length
-        : 0),
+      (
+        Array.isArray(
+          disciplina.topicos
+        )
+          ? disciplina
+              .topicos
+              .length
+          : 0
+      ),
     0
   );
 }
 
-function montarNomeCargo(cargo) {
+function montarNomeCargo(
+  cargo
+) {
   return [
-    textoSeguro(cargo?.nome),
-    textoSeguro(cargo?.especialidade)
+    textoSeguro(
+      cargo?.nome
+    ),
+    textoSeguro(
+      cargo?.especialidade
+    )
   ]
     .filter(Boolean)
     .join(" — ");
 }
 
-function maiorPrioridade(a, b) {
+function maiorPrioridade(
+  a,
+  b
+) {
   const ordem = {
     alta: 3,
     media: 2,
     baixa: 1
   };
 
-  return ordem[b] > ordem[a]
-    ? b
-    : a;
+  return ordem[b] >
+    ordem[a]
+      ? b
+      : a;
 }
 
-function normalizarPrioridade(valor) {
-  const chave = normalizarChave(valor);
+function normalizarPrioridade(
+  valor
+) {
+  const chave =
+    normalizarChave(
+      valor
+    );
 
   if (
     chave === "alta" ||
@@ -1461,8 +2091,11 @@ function normalizarPrioridade(valor) {
   return "media";
 }
 
-function normalizarPeso(valor) {
-  const numero = Number(valor);
+function normalizarPeso(
+  valor
+) {
+  const numero =
+    Number(valor);
 
   if (
     Number.isFinite(numero) &&
@@ -1477,7 +2110,9 @@ function normalizarPeso(valor) {
   return 1;
 }
 
-function normalizarInteiroOuNull(valor) {
+function normalizarInteiroOuNull(
+  valor
+) {
   if (
     valor === null ||
     valor === undefined ||
@@ -1486,9 +2121,12 @@ function normalizarInteiroOuNull(valor) {
     return null;
   }
 
-  const numero = Number(valor);
+  const numero =
+    Number(valor);
 
-  if (!Number.isFinite(numero)) {
+  if (
+    !Number.isFinite(numero)
+  ) {
     return null;
   }
 
@@ -1498,46 +2136,78 @@ function normalizarInteiroOuNull(valor) {
   );
 }
 
-function normalizarData(valor) {
-  const texto = textoSeguro(valor);
+function normalizarData(
+  valor
+) {
+  const texto =
+    textoSeguro(valor);
 
   if (!texto) {
     return "";
   }
 
-  const iso = texto.match(
-    /^(\d{4})-(\d{2})-(\d{2})$/
-  );
+  const iso =
+    texto.match(
+      /^(\d{4})-(\d{2})-(\d{2})$/
+    );
 
   if (iso) {
     return texto;
   }
 
-  const brasileira = texto.match(
-    /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/
-  );
+  const brasileira =
+    texto.match(
+      /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/
+    );
 
   if (brasileira) {
-    const dia = brasileira[1].padStart(2, "0");
-    const mes = brasileira[2].padStart(2, "0");
-    const ano = brasileira[3];
+    const dia =
+      brasileira[1]
+        .padStart(
+          2,
+          "0"
+        );
 
-    return `${ano}-${mes}-${dia}`;
+    const mes =
+      brasileira[2]
+        .padStart(
+          2,
+          "0"
+        );
+
+    const ano =
+      brasileira[3];
+
+    return (
+      `${ano}-${mes}-${dia}`
+    );
   }
 
   return "";
 }
 
-function normalizarChave(valor) {
-  return textoSeguro(valor)
+function normalizarChave(
+  valor
+) {
+  return textoSeguro(
+    valor
+  )
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(
+      /[\u0300-\u036f]/g,
+      ""
+    )
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(
+      /[^a-z0-9]+/g,
+      " "
+    )
     .trim();
 }
 
-function textoSeguro(valor) {
+function textoSeguro(
+  valor
+) {
   if (
     valor === null ||
     valor === undefined
@@ -1545,32 +2215,54 @@ function textoSeguro(valor) {
     return "";
   }
 
-  return String(valor).trim();
+  return String(valor)
+    .trim();
 }
 
-async function gerarHashTexto(texto) {
-  const bytes = new TextEncoder().encode(texto);
+async function gerarHashTexto(
+  texto
+) {
+  const bytes =
+    new TextEncoder()
+      .encode(texto);
 
-  const hash = await crypto.subtle.digest(
-    "SHA-256",
-    bytes
-  );
+  const hash =
+    await crypto.subtle.digest(
+      "SHA-256",
+      bytes
+    );
 
-  return Array.from(new Uint8Array(hash))
-    .map(byte =>
-      byte
-        .toString(16)
-        .padStart(2, "0")
+  return Array.from(
+    new Uint8Array(hash)
+  )
+    .map(
+      byte =>
+        byte
+          .toString(16)
+          .padStart(
+            2,
+            "0"
+          )
     )
     .join("");
 }
 
-async function lerJsonRequest(request) {
-  const contentType = textoSeguro(
-    request.headers.get("content-type")
-  ).toLowerCase();
+async function lerJsonRequest(
+  request
+) {
+  const contentType =
+    textoSeguro(
+      request.headers.get(
+        "content-type"
+      )
+    )
+      .toLowerCase();
 
-  if (!contentType.includes("application/json")) {
+  if (
+    !contentType.includes(
+      "application/json"
+    )
+  ) {
     throw new Error(
       "Esta rota aceita somente application/json."
     );
@@ -1585,7 +2277,9 @@ async function lerJsonRequest(request) {
   }
 }
 
-function validarBindingAI(env) {
+function validarBindingAI(
+  env
+) {
   if (!env?.AI) {
     throw new Error(
       "O binding AI não está configurado no Worker."
@@ -1593,72 +2287,120 @@ function validarBindingAI(env) {
   }
 }
 
-function validarSupabase(env) {
+function validarSupabase(
+  env
+) {
   if (!env?.SUPABASE_URL) {
     throw new Error(
       "SUPABASE_URL não está configurada."
     );
   }
 
-  if (!env?.SUPABASE_SERVICE_ROLE_KEY) {
+  if (
+    !env
+      ?.SUPABASE_SERVICE_ROLE_KEY
+  ) {
     throw new Error(
       "SUPABASE_SERVICE_ROLE_KEY não está configurada."
     );
   }
 }
 
-function obterSupabaseUrl(env) {
-  return textoSeguro(env.SUPABASE_URL)
-    .replace(/\/+$/, "");
+function obterSupabaseUrl(
+  env
+) {
+  return textoSeguro(
+    env.SUPABASE_URL
+  )
+    .replace(
+      /\/+$/,
+      ""
+    );
 }
 
-function supabaseHeaders(env) {
+function supabaseHeaders(
+  env
+) {
   return {
-    apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+    apikey:
+      env
+        .SUPABASE_SERVICE_ROLE_KEY,
+
     Authorization:
-      `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-    "Content-Type": "application/json"
+      `Bearer ${
+        env
+          .SUPABASE_SERVICE_ROLE_KEY
+      }`,
+
+    "Content-Type":
+      "application/json"
   };
 }
 
 function corsHeaders() {
   return {
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin":
+      "*",
+
     "Access-Control-Allow-Methods":
       "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+
     "Access-Control-Allow-Headers":
       "Content-Type, Authorization, apikey, X-Requested-With",
-    "Access-Control-Max-Age": "86400"
+
+    "Access-Control-Max-Age":
+      "86400"
   };
 }
 
-function json(dados, status = 200) {
+function json(
+  dados,
+  status = 200
+) {
   return new Response(
-    JSON.stringify(dados, null, 2),
+    JSON.stringify(
+      dados,
+      null,
+      2
+    ),
     {
       status,
+
       headers: {
         ...corsHeaders(),
+
         "Content-Type":
           "application/json; charset=utf-8",
-        "Cache-Control": "no-store"
+
+        "Cache-Control":
+          "no-store"
       }
     }
   );
 }
 
-function obterMensagemErro(error) {
-  if (error instanceof Error) {
+function obterMensagemErro(
+  error
+) {
+  if (
+    error instanceof Error
+  ) {
     return error.message;
   }
 
-  if (typeof error === "string") {
+  if (
+    typeof error === "string"
+  ) {
     return error;
   }
 
   try {
-    return JSON.stringify(error);
+    return JSON.stringify(
+      error
+    );
   } catch (_) {
-    return "Erro interno desconhecido.";
+    return (
+      "Erro interno desconhecido."
+    );
   }
 }
