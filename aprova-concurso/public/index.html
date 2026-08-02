@@ -5550,11 +5550,15 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
   const API_METADADOS = '/api/ai/extrair-metadados';
   const API_BLOCO = '/api/ai/analisar-bloco';
   const API_FINALIZAR = '/api/ai/finalizar-analise';
+  const API_CATALOGAR_VAGAS = '/api/ai/catalogar-vagas-bloco';
+  const API_CONSOLIDAR_CATALOGO = '/api/ai/consolidar-catalogo';
+  const API_MAPEAR_CONTEUDO = '/api/ai/mapear-conteudo-bloco';
+  const API_FINALIZAR_VAGAS = '/api/ai/finalizar-vagas';
   const API_SALVAR = '/api/ai/salvar-edital';
-  const MAX_CHARS_TO_AI = 68000;
-  const TAMANHO_BLOCO_CLIENTE = 7600;
-  const SOBREPOSICAO_BLOCO_CLIENTE = 700;
-  const MAXIMO_BLOCOS_CLIENTE = 9;
+  const MAX_CHARS_TO_AI = 180000;
+  const TAMANHO_BLOCO_CLIENTE = 7000;
+  const SOBREPOSICAO_BLOCO_CLIENTE = 900;
+  const MAXIMO_BLOCOS_CLIENTE = 24;
 
   let ultimaAnaliseCloudflare = null;
 
@@ -6288,6 +6292,18 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     }
   }
 
+  function resumoCatalogoVagas(catalogo) {
+    const vagas = Array.isArray(catalogo) ? catalogo : [];
+    return vagas.map((vaga, indice) => ({
+      ordem: indice + 1,
+      chave_cargo: vaga.chave_cargo,
+      codigo: vaga.codigo || '',
+      nome: vaga.nome || '',
+      especialidade: vaga.especialidade || '',
+      nivel: vaga.nivel || ''
+    }));
+  }
+
   async function analisarEditalComCloudflareAI(file) {
     try {
       if (!file) return notify('Selecione um arquivo de edital.');
@@ -6306,24 +6322,22 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
       scrollListaCargos = 0;
       metadadosUltimoArquivo = { nome_arquivo: nome, extensao };
 
-      showAnalysis(`⌛ Lendo ${nome}...`);
+      showAnalysis(`⌛ Lendo integralmente ${nome}...`);
       const textoExtraido = await extrairTextoDoArquivo(file);
       const textoParaIA = prepararTextoParaIA(textoExtraido);
 
       if (textoParaIA.length < 100) {
-        throw new Error(
-          'O arquivo está vazio ou possui texto insuficiente para análise.'
-        );
+        throw new Error('O arquivo está vazio ou possui texto insuficiente para análise.');
       }
 
       const blocos = dividirTextoEmBlocosCliente(textoParaIA);
-
       if (!blocos.length) {
         throw new Error('Não foi possível dividir o edital em blocos de análise.');
       }
 
       showAnalysis(
-        `⌛ Etapa 1 de ${blocos.length + 2}: identificando dados gerais do concurso...`
+        `⌛ Etapa 1 de 5: extraindo dados gerais do concurso. ` +
+        `${blocos.length} blocos serão vasculhados em duas passagens.`
       );
 
       const respostaMetadados = await chamarApiJson(
@@ -6335,62 +6349,102 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
         },
         2
       );
-
       const metadados = respostaMetadados.resultado || {};
-      const resultadosBlocos = [];
-      const falhas = [];
+
+      /* PRIMEIRA PASSAGEM: localizar e catalogar todas as vagas/cargos. */
+      const resultadosCatalogo = [];
+      const falhasCatalogo = [];
 
       for (let indice = 0; indice < blocos.length; indice += 1) {
         showAnalysis(
-          `⌛ Analisando bloco ${indice + 1} de ${blocos.length}... ` +
-          'Aguarde; cada bloco é processado separadamente para evitar perda de conexão.'
+          `⌛ Etapa 2 de 5: catalogando vagas — bloco ${indice + 1} de ${blocos.length}. ` +
+          'Nesta passagem, requisitos e cargos são separados das matérias.'
         );
 
         try {
-          const respostaBloco = await chamarApiJson(
-            API_BLOCO,
+          const resposta = await chamarApiJson(
+            API_CATALOGAR_VAGAS,
+            { bloco: blocos[indice], indice, total: blocos.length },
+            2
+          );
+          resultadosCatalogo.push(resposta.resultado || { vagas: [] });
+        } catch (erroBloco) {
+          console.warn(`Falha ao catalogar o bloco ${indice + 1}:`, erroBloco);
+          resultadosCatalogo.push({ vagas: [] });
+          falhasCatalogo.push(indice + 1);
+        }
+      }
+
+      showAnalysis('⌛ Etapa 3 de 5: consolidando códigos, cargos, áreas e especialidades...');
+      const respostaCatalogo = await chamarApiJson(
+        API_CONSOLIDAR_CATALOGO,
+        { resultados_catalogo: resultadosCatalogo },
+        2
+      );
+
+      const catalogo = Array.isArray(respostaCatalogo?.resultado?.vagas)
+        ? respostaCatalogo.resultado.vagas
+        : [];
+
+      if (!catalogo.length) {
+        throw new Error('A leitura não encontrou vagas ou cargos identificáveis no edital.');
+      }
+
+      /* SEGUNDA PASSAGEM: reler todos os blocos e vincular conteúdo ao catálogo. */
+      const resultadosMapeamento = [];
+      const falhasMapeamento = [];
+      const catalogoCompacto = resumoCatalogoVagas(catalogo);
+
+      for (let indice = 0; indice < blocos.length; indice += 1) {
+        showAnalysis(
+          `⌛ Etapa 4 de 5: vinculando matérias — bloco ${indice + 1} de ${blocos.length}. ` +
+          `${catalogo.length} vaga(s) catalogada(s).`
+        );
+
+        try {
+          const resposta = await chamarApiJson(
+            API_MAPEAR_CONTEUDO,
             {
               bloco: blocos[indice],
               indice,
-              total: blocos.length
+              total: blocos.length,
+              catalogo: catalogoCompacto
             },
             2
           );
-
-          resultadosBlocos.push(respostaBloco.resultado || { cargos: [] });
-        } catch (errorBloco) {
-          console.warn(`Falha no bloco ${indice + 1}:`, errorBloco);
-          resultadosBlocos.push({ cargos: [] });
-          falhas.push(indice + 1);
+          resultadosMapeamento.push(resposta.resultado || { aplicacoes: [] });
+        } catch (erroBloco) {
+          console.warn(`Falha ao mapear o bloco ${indice + 1}:`, erroBloco);
+          resultadosMapeamento.push({ aplicacoes: [] });
+          falhasMapeamento.push(indice + 1);
         }
       }
 
       showAnalysis(
-        `⌛ Etapa final: consolidando cargos, disciplinas e tópicos...`
+        '⌛ Etapa 5 de 5: condensando cada vaga com suas matérias, tópicos e informações funcionais...'
       );
 
       const respostaFinal = await chamarApiJson(
-        API_FINALIZAR,
+        API_FINALIZAR_VAGAS,
         {
           metadados,
-          resultados_blocos: resultadosBlocos
+          catalogo,
+          resultados_mapeamento: resultadosMapeamento
         },
         2
       );
 
       const vertical = normalizarResultado(respostaFinal);
-
       if (!vertical) {
         throw new Error(
-          'A análise terminou, mas não retornou cargos com disciplinas e tópicos válidos.'
+          'A análise terminou, mas não retornou vagas com matérias e tópicos vinculados.'
         );
       }
 
       ultimaAnaliseCloudflare = vertical;
-      cargoSelecionadoChave =
-        vertical.cargos.length === 1
-          ? gerarChaveCargo(vertical.cargos[0], 0)
-          : '';
+      cargoSelecionadoChave = vertical.cargos.length === 1
+        ? gerarChaveCargo(vertical.cargos[0], 0)
+        : '';
 
       try {
         localStorage.setItem(
@@ -6401,26 +6455,29 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
 
       renderizarSeletorDeCargos();
 
+      const falhas = Array.from(new Set([
+        ...falhasCatalogo,
+        ...falhasMapeamento
+      ])).sort((a, b) => a - b);
+
       if (falhas.length) {
         notify(
-          `${vertical.cargos.length} cargo(s) identificado(s). ` +
-          `Os blocos ${falhas.join(', ')} não responderam e foram ignorados.`
+          `${vertical.cargos.length} vaga(s) com conteúdo identificada(s). ` +
+          `Os blocos ${falhas.join(', ')} tiveram falha parcial.`
         );
       } else {
         notify(
-          `${vertical.cargos.length} cargo(s) identificado(s). Selecione o cargo desejado.`
+          `${vertical.cargos.length} vaga(s) vinculada(s) às respectivas matérias. Selecione a desejada.`
         );
       }
     } catch (error) {
       console.error('Erro durante a análise do edital:', error);
-
       showAnalysis(`
         <div><strong>Erro na análise do edital</strong></div>
         <div style="margin-top:8px;line-height:1.55">
           ${escapeHtml(error?.message || 'Não foi possível analisar o edital.')}
         </div>
       `, { html: true });
-
       notify('Falha na análise com IA.');
     }
   }
