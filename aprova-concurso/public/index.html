@@ -5555,10 +5555,10 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
   const API_MAPEAR_CONTEUDO = '/api/ai/mapear-conteudo-bloco';
   const API_FINALIZAR_VAGAS = '/api/ai/finalizar-vagas';
   const API_SALVAR = '/api/ai/salvar-edital';
-  const MAX_CHARS_TO_AI = 180000;
-  const TAMANHO_BLOCO_CLIENTE = 7000;
-  const SOBREPOSICAO_BLOCO_CLIENTE = 900;
-  const MAXIMO_BLOCOS_CLIENTE = 24;
+  const MAX_CHARS_TO_AI = 900000;
+  const TAMANHO_BLOCO_CLIENTE = 9000;
+  const SOBREPOSICAO_BLOCO_CLIENTE = 1800;
+  const MAXIMO_BLOCOS_CLIENTE = 120;
 
   let ultimaAnaliseCloudflare = null;
 
@@ -5674,11 +5674,11 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     return `${limpo.slice(0, MAX_CHARS_TO_AI)}\n\n[AVISO: texto truncado automaticamente no navegador.]`;
   }
 
-  function construirContextoCatalogo(texto) {
+  function construirContextosCatalogo(texto) {
     const limpo = textoSeguro(texto);
-    if (!limpo) return '';
+    if (!limpo) return [];
 
-    const partes = limpo
+    const paginas = limpo
       .split(/(?=--- Página \d+ ---)/i)
       .map(parte => parte.trim())
       .filter(Boolean);
@@ -5691,34 +5691,47 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
       /oficial\s+de\s+justi[cç]a/i,
       /[aá]rea\s+(?:judici[aá]ria|administrativa|apoio)/i,
       /especialidade/i,
-      /c[oó]digo\s+do\s+cargo/i,
+      /c[oó]digo\s+(?:do\s+)?cargo/i,
       /requisito(?:s)?/i,
       /remunera[cç][aã]o/i,
       /jornada/i,
       /cadastro\s+de\s+reserva/i,
-      /quadro\s+de\s+vagas/i
+      /quadro\s+de\s+vagas/i,
+      /conte[uú]do\s+program[aá]tico/i,
+      /programa\s+de\s+provas/i
     ];
 
-    const pontuadas = partes.map((parte, indice) => ({
-      parte,
-      indice,
-      pontos: palavrasFortes.reduce(
-        (total, expressao) => total + (expressao.test(parte) ? 1 : 0),
-        0
-      )
-    }));
+    const indices = new Set();
+    paginas.forEach((pagina, indice) => {
+      if (palavrasFortes.some(expressao => expressao.test(pagina))) {
+        indices.add(indice);
+        if (indice > 0) indices.add(indice - 1);
+        if (indice + 1 < paginas.length) indices.add(indice + 1);
+      }
+    });
 
-    const selecionadas = pontuadas
-      .filter(item => item.pontos > 0)
-      .sort((a, b) => b.pontos - a.pontos || a.indice - b.indice)
-      .slice(0, 18)
-      .sort((a, b) => a.indice - b.indice)
-      .map(item => item.parte);
+    /* Primeiras e últimas páginas ajudam a capturar capa, sumário e anexos. */
+    for (let i = 0; i < Math.min(4, paginas.length); i += 1) indices.add(i);
+    for (let i = Math.max(0, paginas.length - 4); i < paginas.length; i += 1) indices.add(i);
 
-    const cabecalho = limpo.slice(0, 5000);
-    const combinado = [cabecalho, ...selecionadas].join('\n\n');
+    const selecionadas = Array.from(indices)
+      .sort((a, b) => a - b)
+      .map(indice => paginas[indice]);
 
-    return combinado.slice(0, 22000);
+    const contextos = [];
+    let atual = '';
+    const LIMITE_CONTEXTO = 20000;
+
+    for (const pagina of selecionadas) {
+      if (atual && atual.length + pagina.length + 2 > LIMITE_CONTEXTO) {
+        contextos.push(atual);
+        atual = '';
+      }
+      atual += `${atual ? '\n\n' : ''}${pagina}`;
+    }
+    if (atual) contextos.push(atual);
+
+    return contextos.slice(0, 12);
   }
 
   function obterPistasConcursoAtivo() {
@@ -6500,7 +6513,13 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
         try {
           const resposta = await chamarApiJson(
             API_CATALOGAR_VAGAS,
-            { bloco: blocos[indice], indice, total: blocos.length },
+            {
+              bloco: blocos[indice],
+              contexto_anterior: indice > 0 ? blocos[indice - 1] : '',
+              contexto_seguinte: indice + 1 < blocos.length ? blocos[indice + 1] : '',
+              indice,
+              total: blocos.length
+            },
             2
           );
           resultadosCatalogo.push(resposta.resultado || { vagas: [] });
@@ -6516,7 +6535,7 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
         API_CONSOLIDAR_CATALOGO,
         {
           resultados_catalogo: resultadosCatalogo,
-          contexto_catalogo: construirContextoCatalogo(textoParaIA),
+          contextos_catalogo: construirContextosCatalogo(textoParaIA),
           metadados,
           pistas: obterPistasConcursoAtivo()
         },
@@ -6547,6 +6566,8 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
             API_MAPEAR_CONTEUDO,
             {
               bloco: blocos[indice],
+              contexto_anterior: indice > 0 ? blocos[indice - 1] : '',
+              contexto_seguinte: indice + 1 < blocos.length ? blocos[indice + 1] : '',
               indice,
               total: blocos.length,
               catalogo: catalogoCompacto
