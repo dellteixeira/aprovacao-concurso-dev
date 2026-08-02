@@ -5674,6 +5674,83 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     return `${limpo.slice(0, MAX_CHARS_TO_AI)}\n\n[AVISO: texto truncado automaticamente no navegador.]`;
   }
 
+  function construirContextoCatalogo(texto) {
+    const limpo = textoSeguro(texto);
+    if (!limpo) return '';
+
+    const partes = limpo
+      .split(/(?=--- Página \d+ ---)/i)
+      .map(parte => parte.trim())
+      .filter(Boolean);
+
+    const palavrasFortes = [
+      /\bcargo(?:s)?\b/i,
+      /\bvaga(?:s)?\b/i,
+      /t[eé]cnico\s+judici[aá]rio/i,
+      /analista\s+judici[aá]rio/i,
+      /oficial\s+de\s+justi[cç]a/i,
+      /[aá]rea\s+(?:judici[aá]ria|administrativa|apoio)/i,
+      /especialidade/i,
+      /c[oó]digo\s+do\s+cargo/i,
+      /requisito(?:s)?/i,
+      /remunera[cç][aã]o/i,
+      /jornada/i,
+      /cadastro\s+de\s+reserva/i,
+      /quadro\s+de\s+vagas/i
+    ];
+
+    const pontuadas = partes.map((parte, indice) => ({
+      parte,
+      indice,
+      pontos: palavrasFortes.reduce(
+        (total, expressao) => total + (expressao.test(parte) ? 1 : 0),
+        0
+      )
+    }));
+
+    const selecionadas = pontuadas
+      .filter(item => item.pontos > 0)
+      .sort((a, b) => b.pontos - a.pontos || a.indice - b.indice)
+      .slice(0, 18)
+      .sort((a, b) => a.indice - b.indice)
+      .map(item => item.parte);
+
+    const cabecalho = limpo.slice(0, 5000);
+    const combinado = [cabecalho, ...selecionadas].join('\n\n');
+
+    return combinado.slice(0, 22000);
+  }
+
+  function obterPistasConcursoAtivo() {
+    try {
+      const concursos = JSON.parse(localStorage.getItem('concursos') || '[]');
+      const ativoId = textoSeguro(
+        localStorage.getItem('activeContestId') ||
+        localStorage.getItem('concursoAtivoId')
+      );
+
+      const ativo = Array.isArray(concursos)
+        ? concursos.find(item => textoSeguro(item?.id) === ativoId)
+        : null;
+
+      if (ativo) {
+        return {
+          titulo: textoSeguro(ativo.titulo || ativo.nome),
+          cargo: textoSeguro(ativo.cargo),
+          banca: textoSeguro(ativo.banca),
+          orgao: textoSeguro(ativo.orgao)
+        };
+      }
+    } catch (_) {}
+
+    return {
+      titulo: textoSeguro(
+        document.querySelector('#contest h3')?.textContent ||
+        document.querySelector('.contest-title h3')?.textContent
+      )
+    };
+  }
+
   function dividirTextoEmBlocosCliente(texto) {
     const blocos = [];
     let inicio = 0;
@@ -5780,13 +5857,72 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     return Number.isFinite(numero) ? Math.max(0, Math.round(numero)) : null;
   }
 
+  function normalizarChaveSemantica(valor) {
+    return textoSeguro(valor)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  }
+
+  function ehRotuloGrupoInvalido(valor) {
+    const texto = normalizarChaveSemantica(valor);
+    return /^(conhecimentos gerais|conhecimentos especificos|conteudo programatico|programa de provas|prova objetiva|provas objetivas|disciplinas|materias|cargo|cargos)$/.test(texto);
+  }
+
+  function ehNomeGenericoInvalido(valor) {
+    const texto = normalizarChaveSemantica(valor);
+    return /^(direito|atribuicoes|atribuicao|tecnico judiciario|analista judiciario|oficial de justica|funcao|funcoes|etapa|etapas|prova|avaliacao|concurso)$/.test(texto);
+  }
+
+  function ehTextoAdministrativo(valor) {
+    const texto = normalizarChaveSemantica(valor);
+    return /(?:^|\b)(?:procedimento de inscricao|pagamento da inscricao|taxa de inscricao|gerenciamento do documento de arrecadacao|documento de arrecadacao estadual|dae|boleto|isencao da taxa|pedido de isencao|inscricao preliminar|inscricao definitiva|confirmacao de inscricao|recurso administrativo|interposicao de recurso|heteroidentificacao|identificacao etnica|pertencimento etnoterritorial|reconhecimento do povo indigena|reserva de vagas|cotas raciais|cotas para negros|cotas para indigenas|documentacao comprobatoria|envio de documentos|convocacao|nomeacao|posse|exercicio|cronograma|calendario|local de prova|cartao de confirmacao|resultado preliminar|resultado final|atribuicoes do cargo|descricao das atribuicoes|remuneracao|jornada de trabalho)(?:\b|$)/.test(texto);
+  }
+
+  function ehTextoRequisito(valor) {
+    const texto = normalizarChaveSemantica(valor);
+    return /requisit|investidura|certificado|diploma|curso superior|ensino medio|registro profissional|conselho regional|experiencia minima|carteira nacional|\bcnh\b|idade minima|aptidao fisica|escolaridade minima|formacao academica/.test(texto);
+  }
+
+  function coincideComCargoFrontend(valor, cargo) {
+    const texto = normalizarChaveSemantica(valor);
+    if (!texto) return false;
+    const referencias = [cargo?.nome, cargo?.especialidade, cargo?.codigo]
+      .map(normalizarChaveSemantica)
+      .filter(Boolean);
+    return referencias.some(referencia => texto === referencia || (referencia.length >= 8 && texto.includes(referencia)));
+  }
+
+  function disciplinaEhValidaFrontend(disciplina, cargo) {
+    const nome = textoSeguro(disciplina?.nome);
+    return Boolean(
+      nome &&
+      nome.length <= 160 &&
+      !ehRotuloGrupoInvalido(nome) &&
+      !ehNomeGenericoInvalido(nome) &&
+      !ehTextoAdministrativo(nome) &&
+      !ehTextoRequisito(nome) &&
+      !coincideComCargoFrontend(nome, cargo)
+    );
+  }
+
+  function topicoEhValidoFrontend(topico, disciplina, cargo) {
+    const nome = typeof topico === 'string' ? textoSeguro(topico) : textoSeguro(topico?.nome);
+    if (!nome || nome.length > 500) return false;
+    if (ehRotuloGrupoInvalido(nome) || ehTextoAdministrativo(nome) || ehTextoRequisito(nome) || coincideComCargoFrontend(nome, cargo)) return false;
+    return normalizarChaveSemantica(nome) !== normalizarChaveSemantica(disciplina?.nome);
+  }
+
   function normalizarEditalMulticargos(dados) {
     const concurso = dados?.concurso || {};
     const cargos = (Array.isArray(dados?.cargos) ? dados.cargos : [])
       .map((cargo, cargoIndex) => {
         const disciplinas = (Array.isArray(cargo?.disciplinas) ? cargo.disciplinas : [])
+          .filter(disciplina => disciplinaEhValidaFrontend(disciplina, cargo))
           .map((disciplina, disciplinaIndex) => ({
-            nome: textoSeguro(disciplina?.nome) || `Disciplina ${disciplinaIndex + 1}`,
+            nome: textoSeguro(disciplina?.nome),
             grupo: textoSeguro(disciplina?.grupo) || 'Conteúdo programático',
             prioridade: normalizarPrioridade(disciplina?.prioridade),
             peso: normalizarPeso(disciplina?.peso),
@@ -5795,12 +5931,12 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
             ),
             ordem: disciplinaIndex,
             topicos: (Array.isArray(disciplina?.topicos) ? disciplina.topicos : [])
+              .filter(topico => topicoEhValidoFrontend(topico, disciplina, cargo))
               .map(topico => ({
                 nome: typeof topico === 'string' ? textoSeguro(topico) : textoSeguro(topico?.nome),
                 status: topico?.status === 'concluido' ? 'concluido' : 'pendente',
                 concluido: topico?.status === 'concluido' || topico?.concluido === true
               }))
-              .filter(topico => topico.nome)
           }))
           .filter(disciplina => disciplina.nome && disciplina.topicos.length);
 
@@ -6378,7 +6514,12 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
       showAnalysis('⌛ Etapa 3 de 5: consolidando códigos, cargos, áreas e especialidades...');
       const respostaCatalogo = await chamarApiJson(
         API_CONSOLIDAR_CATALOGO,
-        { resultados_catalogo: resultadosCatalogo },
+        {
+          resultados_catalogo: resultadosCatalogo,
+          contexto_catalogo: construirContextoCatalogo(textoParaIA),
+          metadados,
+          pistas: obterPistasConcursoAtivo()
+        },
         2
       );
 
