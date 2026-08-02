@@ -1,5 +1,5 @@
 const MODELO_IA = "@cf/zai-org/glm-4.7-flash";
-const LIMITE_CARACTERES_EDITAL = 45000;
+const LIMITE_CARACTERES_EDITAL = 60000;
 
 export default {
   async fetch(request, env) {
@@ -13,7 +13,10 @@ export default {
         });
       }
 
-      if (url.pathname === "/api/health") {
+      if (
+        url.pathname === "/api/health" &&
+        request.method === "GET"
+      ) {
         return json({
           ok: true,
           service: "Aprova Concurso DEV",
@@ -125,24 +128,45 @@ async function testarWorkersAI(env) {
           {
             role: "system",
             content:
-              "Responda de maneira curta e direta.",
+              "Responda somente com a palavra OK. Não explique e não apresente raciocínio.",
           },
           {
             role: "user",
-            content:
-              "Responda somente com a palavra OK.",
+            content: "Responda OK.",
           },
         ],
-        max_completion_tokens: 20,
+        max_completion_tokens: 300,
+        reasoning_effort: "low",
         temperature: 0,
       }
     );
 
+    const escolha =
+      resultado?.choices?.[0] || null;
+
+    const conteudo =
+      escolha?.message?.content ||
+      resultado?.response ||
+      resultado?.result ||
+      null;
+
     return json({
       ok: true,
       modelo: MODELO_IA,
-      duracao_ms: Date.now() - inicio,
-      resultado,
+      duracao_ms:
+        Date.now() - inicio,
+      teste: {
+        conteudo,
+        finish_reason:
+          escolha?.finish_reason ||
+          null,
+        completion_tokens:
+          resultado?.usage
+            ?.completion_tokens ||
+          null,
+      },
+      resultado_completo:
+        resultado,
     });
   } catch (error) {
     console.error(
@@ -155,8 +179,10 @@ async function testarWorkersAI(env) {
         ok: false,
         etapa: "inferencia",
         modelo: MODELO_IA,
-        erro: obterMensagemErro(error),
-        tipo: error?.name || null,
+        erro:
+          obterMensagemErro(error),
+        tipo:
+          error?.name || null,
       },
       500
     );
@@ -248,14 +274,16 @@ async function analisarEdital(
             {
               role: "system",
               content:
-                "Extraia informações de editais de concursos. Responda somente com JSON válido, sem markdown, comentários ou explicações.",
+                "Extraia informações de editais de concursos públicos. Responda somente com JSON válido, sem markdown, comentários ou explicações.",
             },
             {
               role: "user",
               content: prompt,
             },
           ],
-          max_completion_tokens: 6000,
+          max_completion_tokens:
+            6000,
+          reasoning_effort: "low",
           temperature: 0.1,
         }
       );
@@ -273,8 +301,10 @@ async function analisarEdital(
       resposta: resultado,
       analise: resultado,
       arquivo: {
-        nome: nomeArquivo || null,
-        tipo: tipoArquivo || null,
+        nome:
+          nomeArquivo || null,
+        tipo:
+          tipoArquivo || null,
         caracteres_recebidos:
           textoOriginal.length,
         caracteres_analisados:
@@ -294,7 +324,8 @@ async function analisarEdital(
     return json(
       {
         ok: false,
-        erro: obterMensagemErro(error),
+        erro:
+          obterMensagemErro(error),
         modelo: MODELO_IA,
       },
       500
@@ -386,7 +417,6 @@ async function lerDadosDaRequisicao(
     return {
       texto_edital:
         await request.text(),
-
       tipo_arquivo:
         "text/plain",
     };
@@ -406,7 +436,9 @@ function montarPrompt({
   tipoArquivo,
 }) {
   return `
-Analise o edital abaixo e retorne SOMENTE JSON válido neste formato:
+Analise o edital de concurso público abaixo e retorne SOMENTE JSON válido.
+
+Use exatamente esta estrutura:
 
 {
   "concurso": {
@@ -433,7 +465,7 @@ Analise o edital abaixo e retorne SOMENTE JSON válido neste formato:
   "estrategia": ""
 }
 
-Regras:
+Regras obrigatórias:
 
 1. Extraia todas as disciplinas, tópicos e subtópicos do conteúdo programático.
 2. Preserve a terminologia do edital.
@@ -443,6 +475,7 @@ Regras:
 6. Prioridade deve ser alta, media ou baixa.
 7. Peso deve ser inteiro e no mínimo 1.
 8. Todos os tópicos começam com concluido=false e status="pendente".
+9. Não use markdown, comentários ou texto fora do JSON.
 
 Arquivo: ${
     nomeArquivo ||
@@ -509,7 +542,7 @@ function interpretarRespostaDaIa(
           candidato
         );
       } catch {
-        // Continua.
+        // Continua procurando outro formato.
       }
     }
   }
@@ -531,26 +564,24 @@ function interpretarRespostaDaIa(
         return item;
       }
 
-      const textos = [
-        item,
-        item?.text,
-        item?.content,
-      ];
-
       for (
-        const texto
-        of textos
+        const candidato
+        of [
+          item,
+          item?.text,
+          item?.content,
+        ]
       ) {
         if (
-          typeof texto ===
+          typeof candidato ===
           "string"
         ) {
           try {
             return extrairJson(
-              texto
+              candidato
             );
           } catch {
-            // Continua.
+            // Continua procurando outro formato.
           }
         }
       }
@@ -600,8 +631,7 @@ function extrairJson(valor) {
     );
   }
 
-  const candidatos = [
-    texto,
+  const semMarkdown =
     texto
       .replace(
         /^```(?:json)?\s*/i,
@@ -611,12 +641,14 @@ function extrairJson(valor) {
         /\s*```$/i,
         ""
       )
-      .trim(),
-  ];
+      .trim();
 
   for (
     const candidato
-    of candidatos
+    of [
+      texto,
+      semMarkdown,
+    ]
   ) {
     try {
       return JSON.parse(
@@ -628,10 +660,10 @@ function extrairJson(valor) {
   }
 
   const inicio =
-    texto.indexOf("{");
+    semMarkdown.indexOf("{");
 
   const fim =
-    texto.lastIndexOf("}");
+    semMarkdown.lastIndexOf("}");
 
   if (
     inicio < 0 ||
@@ -643,7 +675,7 @@ function extrairJson(valor) {
   }
 
   return JSON.parse(
-    texto.slice(
+    semMarkdown.slice(
       inicio,
       fim + 1
     )
@@ -695,18 +727,11 @@ function normalizarResultado(
               "object"
               ? item
               : {
-                  nome: item,
+                  nome:
+                    textoSeguro(
+                      item
+                    ),
                 };
-
-          const nome =
-            textoSeguro(
-              disciplina.nome ||
-                disciplina.materia ||
-                disciplina.disciplina ||
-                `Disciplina ${
-                  indice + 1
-                }`
-            );
 
           const topicosOrigem =
             Array.isArray(
@@ -753,16 +778,29 @@ function normalizarResultado(
               );
 
           return {
-            nome,
+            nome:
+              textoSeguro(
+                disciplina.nome ||
+                  disciplina.materia ||
+                  disciplina.disciplina ||
+                  `Disciplina ${
+                    indice + 1
+                  }`
+              ),
+
             prioridade:
               normalizarPrioridade(
                 disciplina.prioridade
               ),
+
             peso:
               normalizarPeso(
                 disciplina.peso
               ),
-            ordem: indice,
+
+            ordem:
+              indice,
+
             topicos,
           };
         }
@@ -902,28 +940,6 @@ async function salvarEdital(
       );
     }
 
-    const concurso =
-      await supabaseSelectUm(
-        env,
-        "concursos",
-        {
-          id: concursoId,
-          user_id: userId,
-        },
-        "id,user_id"
-      );
-
-    if (!concurso) {
-      return json(
-        {
-          ok: false,
-          erro:
-            "Concurso não encontrado para esse usuário.",
-        },
-        404
-      );
-    }
-
     await supabaseUpdate(
       env,
       "concursos",
@@ -953,28 +969,30 @@ async function salvarEdital(
             .data_prova ||
           null,
 
-        estado: "ativo",
+        estado:
+          "ativo",
 
-        ativo: true,
+        ativo:
+          true,
 
         updated_at:
           new Date()
             .toISOString(),
       },
       {
-        id: concursoId,
-        user_id: userId,
+        id:
+          concursoId,
+
+        user_id:
+          userId,
       }
     );
 
-    await excluirVerticalizacaoAnterior(
-      env,
-      concursoId,
-      userId
-    );
+    let totalDisciplinas =
+      0;
 
-    let totalDisciplinas = 0;
-    let totalTopicos = 0;
+    let totalTopicos =
+      0;
 
     for (
       const [
@@ -1008,6 +1026,14 @@ async function salvarEdital(
               indice,
           }
         );
+
+      if (!criada?.id) {
+        throw new Error(
+          `O Supabase não retornou o ID da disciplina "${disciplina.nome}".`
+        );
+      }
+
+      totalDisciplinas++;
 
       for (
         const [
@@ -1045,8 +1071,6 @@ async function salvarEdital(
 
         totalTopicos++;
       }
-
-      totalDisciplinas++;
     }
 
     return json({
@@ -1083,128 +1107,6 @@ async function salvarEdital(
   }
 }
 
-async function excluirVerticalizacaoAnterior(
-  env,
-  concursoId,
-  userId
-) {
-  const disciplinas =
-    await supabaseSelect(
-      env,
-      "disciplinas",
-      {
-        concurso_id:
-          concursoId,
-
-        user_id:
-          userId,
-      },
-      "id"
-    );
-
-  for (
-    const disciplina
-    of disciplinas
-  ) {
-    await supabaseDelete(
-      env,
-      "topicos",
-      {
-        disciplina_id:
-          disciplina.id,
-
-        concurso_id:
-          concursoId,
-
-        user_id:
-          userId,
-      }
-    );
-  }
-
-  await supabaseDelete(
-    env,
-    "disciplinas",
-    {
-      concurso_id:
-        concursoId,
-
-      user_id:
-        userId,
-    }
-  );
-}
-
-async function supabaseSelect(
-  env,
-  tabela,
-  filtros = {},
-  campos = "*"
-) {
-  const parametros =
-    montarFiltros(
-      filtros
-    );
-
-  parametros.set(
-    "select",
-    campos
-  );
-
-  parametros.set(
-    "limit",
-    "10000"
-  );
-
-  const response =
-    await fetch(
-      `${obterSupabaseUrl(
-        env
-      )}/rest/v1/${tabela}?${parametros}`,
-      {
-        method: "GET",
-        headers:
-          supabaseHeaders(
-            env
-          ),
-      }
-    );
-
-  const data =
-    await lerRespostaHttp(
-      response
-    );
-
-  if (!response.ok) {
-    throw new Error(
-      `Erro ao consultar ${tabela}: ${JSON.stringify(
-        data
-      )}`
-    );
-  }
-
-  return Array.isArray(data)
-    ? data
-    : [];
-}
-
-async function supabaseSelectUm(
-  env,
-  tabela,
-  filtros = {},
-  campos = "*"
-) {
-  const registros =
-    await supabaseSelect(
-      env,
-      tabela,
-      filtros,
-      campos
-    );
-
-  return registros[0] || null;
-}
-
 async function supabaseInsert(
   env,
   tabela,
@@ -1216,7 +1118,8 @@ async function supabaseInsert(
         env
       )}/rest/v1/${tabela}`,
       {
-        method: "POST",
+        method:
+          "POST",
 
         headers: {
           ...supabaseHeaders(
@@ -1265,15 +1168,19 @@ async function supabaseUpdate(
   payload,
   filtros
 ) {
+  const parametros =
+    montarFiltros(
+      filtros
+    );
+
   const response =
     await fetch(
       `${obterSupabaseUrl(
         env
-      )}/rest/v1/${tabela}?${montarFiltros(
-        filtros
-      )}`,
+      )}/rest/v1/${tabela}?${parametros.toString()}`,
       {
-        method: "PATCH",
+        method:
+          "PATCH",
 
         headers: {
           ...supabaseHeaders(
@@ -1299,48 +1206,6 @@ async function supabaseUpdate(
   if (!response.ok) {
     throw new Error(
       `Erro ao atualizar ${tabela}: ${JSON.stringify(
-        data
-      )}`
-    );
-  }
-
-  return data;
-}
-
-async function supabaseDelete(
-  env,
-  tabela,
-  filtros
-) {
-  const response =
-    await fetch(
-      `${obterSupabaseUrl(
-        env
-      )}/rest/v1/${tabela}?${montarFiltros(
-        filtros
-      )}`,
-      {
-        method: "DELETE",
-
-        headers: {
-          ...supabaseHeaders(
-            env
-          ),
-
-          Prefer:
-            "return=minimal",
-        },
-      }
-    );
-
-  const data =
-    await lerRespostaHttp(
-      response
-    );
-
-  if (!response.ok) {
-    throw new Error(
-      `Erro ao excluir em ${tabela}: ${JSON.stringify(
         data
       )}`
     );
@@ -1413,7 +1278,8 @@ function supabaseHeaders(env) {
   }
 
   const headers = {
-    apikey: chave,
+    apikey:
+      chave,
 
     "Content-Type":
       "application/json",
@@ -1455,7 +1321,8 @@ function normalizarPrioridade(
   const prioridade =
     removerAcentos(
       textoSeguro(
-        valor || "media"
+        valor ||
+          "media"
       )
     ).toLowerCase();
 
