@@ -5562,21 +5562,195 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
     }
 
     try {
+      if (!supabaseClient) {
+        throw new Error('O Supabase não está conectado. Entre na sua conta antes de salvar.');
+      }
+
+      const {
+        data: { user },
+        error: userError
+      } = await supabaseClient.auth.getUser();
+
+      if (userError) throw userError;
+
+      if (!user) {
+        throw new Error('Nenhum usuário autenticado. Entre na sua conta antes de salvar.');
+      }
+
+      let concursoAtivoId = '';
+
+      /*
+       * Primeiro tenta recuperar o ID utilizado pelo gerenciador local
+       * de concursos, considerando as diferentes versões do aplicativo.
+       */
+      const chavesIdAtivo = [
+        'aprovaConcursoAtivoId',
+        'aprovaActiveContestId',
+        'activeContestId',
+        'aprovaConcursoAtivo',
+        'aprovaContestActiveId'
+      ];
+
+      for (const chave of chavesIdAtivo) {
+        const valor = String(localStorage.getItem(chave) || '').trim();
+        if (valor && /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(valor)) {
+          concursoAtivoId = valor;
+          break;
+        }
+      }
+
+      /*
+       * Procura também nos registros locais de concursos.
+       */
+      if (!concursoAtivoId) {
+        const chavesListas = [
+          'aprovaConcursos',
+          'aprovaContestRegistry',
+          'aprovaConcursosCadastrados'
+        ];
+
+        for (const chave of chavesListas) {
+          try {
+            const lista = JSON.parse(localStorage.getItem(chave) || '[]');
+
+            if (!Array.isArray(lista)) continue;
+
+            const ativo = lista.find(item =>
+              item &&
+              (
+                item.ativo === true ||
+                String(item.estado || '').toLowerCase() === 'ativo' ||
+                String(item.id || '') === String(localStorage.getItem('aprovaConcursoAtivo') || '')
+              )
+            );
+
+            if (ativo?.id) {
+              concursoAtivoId = String(ativo.id).trim();
+              break;
+            }
+          } catch (_) {}
+        }
+      }
+
+      /*
+       * Fonte definitiva: consulta os concursos do usuário no Supabase.
+       * Prioriza o registro ativo e, na falta dele, usa o mais recente.
+       */
+      if (!concursoAtivoId) {
+        const { data: concursos, error: concursoError } = await supabaseClient
+          .from('concursos')
+          .select('id,estado,ativo,created_at,updated_at')
+          .eq('user_id', user.id)
+          .order('updated_at', { ascending: false, nullsFirst: false })
+          .order('created_at', { ascending: false });
+
+        if (concursoError) throw concursoError;
+
+        const concursoAtivo =
+          (concursos || []).find(item =>
+            item?.ativo === true ||
+            String(item?.estado || '').toLowerCase() === 'ativo'
+          ) ||
+          (concursos || [])[0];
+
+        concursoAtivoId = String(concursoAtivo?.id || '').trim();
+      }
+
+      if (!concursoAtivoId) {
+        throw new Error(
+          'Nenhum concurso ativo foi encontrado. Cadastre ou ative um concurso antes de salvar o edital.'
+        );
+      }
+
       showAnalysis('⌛ Salvando concurso, disciplinas e tópicos no Supabase DEV...');
+
       const response = await fetch(API_SALVAR, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ resultado: ultimaAnaliseCloudflare })
+        headers: {
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          resultado: ultimaAnaliseCloudflare,
+          user_id: user.id,
+          concurso_id: concursoAtivoId
+        })
       });
 
       const data = await response.json().catch(() => ({}));
+
       if (!response.ok || !data.ok) {
         throw new Error(data.erro || 'Não foi possível salvar no Supabase.');
       }
 
-      showAnalysis(`✓ Salvo no Supabase DEV.\nConcurso ID: ${data.concurso_id}\nDisciplinas: ${data.disciplinas_salvas}\nTópicos: ${data.topicos_salvos}`);
-      notify('Dados salvos no Supabase DEV.');
+      /*
+       * Aplica imediatamente a verticalização na interface e no
+       * armazenamento local, sem depender de um novo carregamento.
+       */
+      try {
+        window.verticalizacaoImportada = ultimaAnaliseCloudflare;
+        localStorage.setItem(
+          'aprovaVerticalizacao',
+          JSON.stringify(ultimaAnaliseCloudflare)
+        );
+
+        const info = ultimaAnaliseCloudflare.concurso || {};
+        const disciplinas = Array.isArray(ultimaAnaliseCloudflare.disciplinas)
+          ? ultimaAnaliseCloudflare.disciplinas
+          : [];
+        const totalTopicos = disciplinas.reduce(
+          (total, disciplina) => total + (Array.isArray(disciplina.topicos) ? disciplina.topicos.length : 0),
+          0
+        );
+
+        let concursoLocal = {};
+        try {
+          concursoLocal = JSON.parse(localStorage.getItem('aprovaConcurso') || '{}') || {};
+        } catch (_) {}
+
+        concursoLocal = {
+          ...concursoLocal,
+          nome: info.nome || concursoLocal.nome || '',
+          orgao: info.orgao || concursoLocal.orgao || '',
+          cargo: info.cargo || concursoLocal.cargo || '',
+          banca: info.banca || concursoLocal.banca || '',
+          prova: info.data_prova || concursoLocal.prova || '',
+          materias: disciplinas.map(item => item.nome).filter(Boolean).join(', '),
+          topicos: totalTopicos
+        };
+
+        localStorage.setItem('aprovaConcurso', JSON.stringify(concursoLocal));
+
+        try { window.salvarVerticalizacao?.(); } catch (_) {}
+        try { window.renderIndicadoresDoConcurso?.(); } catch (_) {}
+        try { window.renderConcurso?.(); } catch (_) {}
+        try { window.renderTopicosImportados?.(); } catch (_) {}
+        try { window.atualizarMateriasDisponiveis?.(); } catch (_) {}
+        try { window.renderFontesEdital?.(); } catch (_) {}
+        try { window.gerarPlanoAdaptativo?.(); } catch (_) {}
+
+        window.dispatchEvent(
+          new CustomEvent('aprova:topics-changed', {
+            detail: { source: 'cloudflare-ai-save' }
+          })
+        );
+        document.dispatchEvent(new CustomEvent('aprova:render'));
+      } catch (renderError) {
+        console.warn(
+          'Os dados foram salvos, mas a atualização imediata da tela falhou:',
+          renderError
+        );
+      }
+
+      showAnalysis(
+        `✓ Salvo no Supabase DEV.\n` +
+        `Concurso ID: ${data.concurso_id}\n` +
+        `Disciplinas: ${data.disciplinas_salvas}\n` +
+        `Tópicos: ${data.topicos_salvos}`
+      );
+
+      notify('Edital salvo e aplicado ao concurso ativo.');
     } catch (error) {
+      console.error('Erro ao salvar a análise no Supabase:', error);
       showAnalysis(`Erro ao salvar: ${error.message || 'falha no Supabase.'}`);
       notify('Falha ao salvar no Supabase.');
     }
