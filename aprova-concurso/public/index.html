@@ -3242,16 +3242,10 @@ body.dark .master-auth-error{background:#321c28;border-color:#74404f;color:#ffb6
 
   async function saveActiveStateRemote() {
     clearTimeout(syncTimer);
-    if (!client || !currentUser) return;
-    const id = String(localStorage.getItem(ACTIVE) || '');
-    if (!isUuid(id)) return;
-    const estado = captureActiveState() || {};
-    const { error } = await client
-      .from('concursos')
-      .update({ estado, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .eq('user_id', currentUser.id);
-    if (error) console.warn('Não foi possível sincronizar o estado do concurso:', error.message);
+    // O estado detalhado da interface continua salvo no localStorage.
+    // No Supabase, a coluna "estado" é textual e guarda apenas o status
+    // do concurso, por exemplo: ativo, concluido ou arquivado.
+    return;
   }
 
   function scheduleStateSave() {
@@ -3286,7 +3280,7 @@ body.dark .master-auth-error{background:#321c28;border-color:#74404f;color:#ffb6
         cargo: form.cargo,
         banca: form.banca || null,
         data_prova: form.data_prova,
-        estado: {}
+        estado: 'ativo'
       };
       const { data, error } = await client
         .from('concursos')
