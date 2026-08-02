@@ -147,10 +147,10 @@ function currentSupabaseConfig(){
 const initialConfig=currentSupabaseConfig();
 const supabaseUrlInput=document.getElementById('supabaseUrl');
 const supabaseKeyInput=document.getElementById('supabaseKey');
+let credentialsUnlocked=false;
 supabaseUrlInput.value=initialConfig.url||'';
 supabaseKeyInput.value=initialConfig.key||'';
 applyMasterAccess(null);
-let credentialsUnlocked=false;
 const CREDENTIAL_LOCK_HASH='aprovaCredentialLockHash';
 const CREDENTIAL_LOCK_SALT='aprovaCredentialLockSalt';
 function randomSalt(){const a=new Uint8Array(16);crypto.getRandomValues(a);return Array.from(a,b=>b.toString(16).padStart(2,'0')).join('')}
@@ -2202,8 +2202,9 @@ renderPlanoEstavel();
         .delete()
         .eq('concurso_id',id)
         .eq('user_id',currentUser.id);
-      // 42P01 = tabela inexistente; 42703 = coluna inexistente. Ignora apenas esses casos.
-      if(error && !['42P01','42703'].includes(String(error.code||'')))throw error;
+      // Ignora ausência da tabela/coluna opcional no schema cache.
+      if(error && !['42P01','42703','PGRST205'].includes(String(error.code||'')) &&
+        !/schema cache|could not find the table/i.test(String(error.message||'')))throw error;
     }
 
     if(editalIds.length){
@@ -3868,7 +3869,12 @@ body.dark .final-session-summary,body.dark .final-topic-select{background:#101b3
     const { error } = await sb.from('study_sessions').upsert(payload, {
       onConflict: 'user_id,concurso_id,slot_key'
     });
-    if (error) throw error;
+    if (error) {
+      const missing = ['42P01', 'PGRST205'].includes(String(error.code || '')) ||
+        /study_sessions|schema cache|could not find the table/i.test(String(error.message || ''));
+      if (missing) return false;
+      throw error;
+    }
     return true;
   }
   function weeklyBounds(offsetWeeks = 0) {
@@ -3887,7 +3893,12 @@ body.dark .final-session-summary,body.dark .final-topic-select{background:#101b3
       .eq('concurso_id', contestId)
       .gte('data_sessao', start)
       .lt('data_sessao', end);
-    if (error) throw error;
+    if (error) {
+      const missing = ['42P01', 'PGRST205'].includes(String(error.code || '')) ||
+        /study_sessions|schema cache|could not find the table/i.test(String(error.message || ''));
+      if (missing) return [];
+      throw error;
+    }
     return Array.isArray(data) ? data : [];
   }
   function updateDashboard(currentRows, previousRows) {
@@ -5044,7 +5055,12 @@ body.dark #progress .performance-topics .performance-questions-embedded{backgrou
     const start=evolutionMode==='daily'?monday():addDays(monday(),-28);
     const end=addDays(monday(),7);
     const {data,error}=await sb.from('study_sessions').select('data_sessao,duration_minutes,completed').eq('user_id',u.id).eq('concurso_id',cid).eq('completed',true).gte('data_sessao',iso(start)).lt('data_sessao',iso(end));
-    if(error)throw error;return data||[];
+    if(error){
+      const missing=['42P01','PGRST205'].includes(String(error.code||''))||/study_sessions|schema cache|could not find the table/i.test(String(error.message||''));
+      if(missing)return [];
+      throw error;
+    }
+    return data||[];
   }
   function renderEvolution(rows){
     const chart=ensureEvolutionUI();if(!chart)return;
@@ -5664,17 +5680,26 @@ body.dark #progress .performance-topics .dominated-topic-row.is-studied .dominat
 
       showAnalysis('⌛ Salvando concurso, disciplinas e tópicos no Supabase DEV...');
 
-      const response = await fetch(API_SALVAR, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json'
-        },
-        body: JSON.stringify({
-          resultado: ultimaAnaliseCloudflare,
-          user_id: user.id,
-          concurso_id: concursoAtivoId
-        })
-      });
+      const salvarUrl = new URL(API_SALVAR, window.location.origin).toString();
+      let response;
+      try {
+        response = await fetch(salvarUrl, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({
+            resultado: ultimaAnaliseCloudflare,
+            user_id: user.id,
+            concurso_id: concursoAtivoId
+          })
+        });
+      } catch (networkError) {
+        throw new Error(
+          `Não foi possível alcançar o Worker em ${salvarUrl}. ` +
+          `Verifique o deployment e a rota /api/ai/salvar-edital. Detalhe: ${networkError?.message || networkError}`
+        );
+      }
 
       const data = await response.json().catch(() => ({}));
 
