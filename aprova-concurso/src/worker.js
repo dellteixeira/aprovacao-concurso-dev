@@ -5,2049 +5,1094 @@ const LIMITE_CURTO = 22000;
 const TAMANHO_BLOCO = 14000;
 const SOBREPOSICAO_BLOCO = 1200;
 const MAXIMO_BLOCOS = 6;
-const CONCORRENCIA_IA = 3;
 const LIMITE_TEXTO_TOTAL = 80000;
+const CONCORRENCIA_IA = 3;
 
-const ESQUEMA_EDITAL_COMPLETO = {
+const PRIORIDADES = ["alta", "media", "baixa"];
+
+const ESQUEMA_DISCIPLINA = {
   type: "object",
+  additionalProperties: false,
+  properties: {
+    nome: {
+      type: "string"
+    },
+    grupo: {
+      type: "string"
+    },
+    prioridade: {
+      type: "string",
+      enum: PRIORIDADES
+    },
+    peso: {
+      type: "integer",
+      minimum: 1
+    },
+    quantidade_questoes: {
+      type: ["integer", "null"],
+      minimum: 0
+    },
+    topicos: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          nome: {
+            type: "string"
+          },
+          status: {
+            type: "string",
+            enum: ["pendente", "concluido"]
+          }
+        },
+        required: ["nome", "status"]
+      }
+    }
+  },
+  required: [
+    "nome",
+    "grupo",
+    "prioridade",
+    "peso",
+    "quantidade_questoes",
+    "topicos"
+  ]
+};
+
+const ESQUEMA_CARGO = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    codigo: {
+      type: "string"
+    },
+    nome: {
+      type: "string"
+    },
+    especialidade: {
+      type: "string"
+    },
+    nivel: {
+      type: "string"
+    },
+    requisitos: {
+      type: "string"
+    },
+    vagas: {
+      type: ["integer", "null"],
+      minimum: 0
+    },
+    disciplinas: {
+      type: "array",
+      items: ESQUEMA_DISCIPLINA
+    }
+  },
+  required: [
+    "codigo",
+    "nome",
+    "especialidade",
+    "nivel",
+    "requisitos",
+    "vagas",
+    "disciplinas"
+  ]
+};
+
+const ESQUEMA_EDITAL_MULTICARGOS = {
+  type: "object",
+  additionalProperties: false,
   properties: {
     concurso: {
       type: "object",
+      additionalProperties: false,
       properties: {
-        nome: { type: "string" },
-        orgao: { type: "string" },
-        cargo: { type: "string" },
-        banca: { type: "string" },
-        data_prova: { type: "string" },
+        nome: {
+          type: "string"
+        },
+        orgao: {
+          type: "string"
+        },
+        banca: {
+          type: "string"
+        },
+        numero_edital: {
+          type: "string"
+        },
+        data_prova: {
+          type: "string"
+        }
       },
       required: [
         "nome",
         "orgao",
-        "cargo",
         "banca",
-        "data_prova",
-      ],
+        "numero_edital",
+        "data_prova"
+      ]
     },
-
-    disciplinas: {
+    cargos: {
       type: "array",
-      minItems: 1,
-
-      items: {
-        type: "object",
-
-        properties: {
-          nome: {
-            type: "string",
-          },
-
-          prioridade: {
-            type: "string",
-            enum: [
-              "alta",
-              "media",
-              "baixa",
-            ],
-          },
-
-          peso: {
-            type: "integer",
-            minimum: 1,
-          },
-
-          topicos: {
-            type: "array",
-            minItems: 1,
-
-            items: {
-              type: "object",
-
-              properties: {
-                nome: {
-                  type: "string",
-                },
-              },
-
-              required: [
-                "nome",
-              ],
-            },
-          },
-        },
-
-        required: [
-          "nome",
-          "prioridade",
-          "peso",
-          "topicos",
-        ],
-      },
+      items: ESQUEMA_CARGO
     },
-
     estrategia: {
-      type: "string",
-    },
+      type: "string"
+    }
   },
-
   required: [
     "concurso",
-    "disciplinas",
-    "estrategia",
-  ],
+    "cargos",
+    "estrategia"
+  ]
 };
 
 const ESQUEMA_METADADOS = {
   type: "object",
-
+  additionalProperties: false,
   properties: {
     concurso: {
       type: "object",
-
+      additionalProperties: false,
       properties: {
         nome: {
-          type: "string",
+          type: "string"
         },
-
         orgao: {
-          type: "string",
+          type: "string"
         },
-
-        cargo: {
-          type: "string",
-        },
-
         banca: {
-          type: "string",
+          type: "string"
         },
-
+        numero_edital: {
+          type: "string"
+        },
         data_prova: {
-          type: "string",
-        },
+          type: "string"
+        }
       },
-
       required: [
         "nome",
         "orgao",
-        "cargo",
         "banca",
-        "data_prova",
-      ],
+        "numero_edital",
+        "data_prova"
+      ]
     },
-
     estrategia: {
-      type: "string",
-    },
+      type: "string"
+    }
   },
-
   required: [
     "concurso",
-    "estrategia",
-  ],
+    "estrategia"
+  ]
 };
 
-const ESQUEMA_BLOCO = {
+const ESQUEMA_BLOCO_CARGOS = {
   type: "object",
-
+  additionalProperties: false,
   properties: {
-    disciplinas: {
+    cargos: {
       type: "array",
-
-      items: {
-        type: "object",
-
-        properties: {
-          nome: {
-            type: "string",
-          },
-
-          prioridade: {
-            type: "string",
-            enum: [
-              "alta",
-              "media",
-              "baixa",
-            ],
-          },
-
-          peso: {
-            type: "integer",
-            minimum: 1,
-          },
-
-          topicos: {
-            type: "array",
-
-            items: {
-              type: "object",
-
-              properties: {
-                nome: {
-                  type: "string",
-                },
-              },
-
-              required: [
-                "nome",
-              ],
-            },
-          },
-        },
-
-        required: [
-          "nome",
-          "prioridade",
-          "peso",
-          "topicos",
-        ],
-      },
-    },
+      items: ESQUEMA_CARGO
+    }
   },
-
-  required: [
-    "disciplinas",
-  ],
+  required: ["cargos"]
 };
 
 export default {
   async fetch(request, env) {
-    const url = new URL(
-      request.url
-    );
+    const url = new URL(request.url);
 
     try {
-      if (
-        request.method ===
-        "OPTIONS"
-      ) {
-        return new Response(
-          null,
-          {
-            status: 204,
-            headers:
-              corsHeaders(),
-          }
-        );
-      }
-
-      if (
-        url.pathname ===
-          "/api/health" &&
-        request.method ===
-          "GET"
-      ) {
-        return json({
-          ok: true,
-
-          service:
-            "Aprova Concurso DEV",
-
-          modelo_teste:
-            MODELO_TESTE,
-
-          modelo_extracao:
-            MODELO_EXTRACAO,
-
-          ai:
-            Boolean(
-              env.AI
-            ),
-
-          assets:
-            Boolean(
-              env.ASSETS
-            ),
-
-          supabase:
-            Boolean(
-              env.SUPABASE_URL &&
-              env.SUPABASE_SERVICE_ROLE_KEY
-            ),
-
-          processamento_extenso: {
-            limite_curto:
-              LIMITE_CURTO,
-
-            tamanho_bloco:
-              TAMANHO_BLOCO,
-
-            maximo_blocos:
-              MAXIMO_BLOCOS,
-
-            concorrencia:
-              CONCORRENCIA_IA,
-          },
-
-          debug: {
-            tem_AI:
-              Boolean(
-                env.AI
-              ),
-
-            tem_ASSETS:
-              Boolean(
-                env.ASSETS
-              ),
-
-            tem_SUPABASE_URL:
-              Boolean(
-                env.SUPABASE_URL
-              ),
-
-            tem_SUPABASE_SERVICE_ROLE_KEY:
-              Boolean(
-                env.SUPABASE_SERVICE_ROLE_KEY
-              ),
-          },
+      if (request.method === "OPTIONS") {
+        return new Response(null, {
+          status: 204,
+          headers: corsHeaders()
         });
       }
 
       if (
-        url.pathname ===
-          "/api/ai/teste" &&
-        request.method ===
-          "GET"
+        url.pathname === "/api/health" &&
+        request.method === "GET"
       ) {
-        return testarWorkersAI(
-          env
-        );
+        return json({
+          ok: true,
+          service: "Aprova Concurso DEV",
+          versao: "multicargos-1.0.0",
+          modelo_teste: MODELO_TESTE,
+          modelo_extracao: MODELO_EXTRACAO,
+          ai: Boolean(env.AI),
+          assets: Boolean(env.ASSETS),
+          supabase: Boolean(
+            env.SUPABASE_URL &&
+            env.SUPABASE_SERVICE_ROLE_KEY
+          ),
+          processamento_extenso: {
+            limite_curto: LIMITE_CURTO,
+            tamanho_bloco: TAMANHO_BLOCO,
+            maximo_blocos: MAXIMO_BLOCOS,
+            concorrencia: CONCORRENCIA_IA
+          },
+          debug: {
+            tem_AI: Boolean(env.AI),
+            tem_ASSETS: Boolean(env.ASSETS),
+            tem_SUPABASE_URL: Boolean(env.SUPABASE_URL),
+            tem_SUPABASE_SERVICE_ROLE_KEY: Boolean(
+              env.SUPABASE_SERVICE_ROLE_KEY
+            )
+          }
+        });
       }
 
       if (
-        url.pathname ===
-          "/api/ai/analisar-edital" &&
-        request.method ===
-          "POST"
+        url.pathname === "/api/ai/teste" &&
+        request.method === "GET"
       ) {
-        return analisarEdital(
-          request,
-          env
-        );
+        return testarWorkersAI(env);
       }
 
       if (
-        url.pathname ===
-          "/api/ai/salvar-edital" &&
-        request.method ===
-          "POST"
+        url.pathname === "/api/ai/analisar-edital" &&
+        request.method === "POST"
       ) {
-        return salvarEdital(
-          request,
-          env
-        );
+        return analisarEdital(request, env);
       }
 
       if (
-        url.pathname.startsWith(
-          "/api/"
-        )
+        url.pathname === "/api/ai/salvar-edital" &&
+        request.method === "POST"
       ) {
+        return salvarEdital(request, env);
+      }
+
+      if (url.pathname.startsWith("/api/")) {
         return json(
           {
             ok: false,
-
-            erro:
-              "Rota da API não encontrada.",
-
-            path:
-              url.pathname,
+            erro: "Rota da API não encontrada.",
+            path: url.pathname
           },
           404
         );
       }
 
       if (env.ASSETS) {
-        return env.ASSETS.fetch(
-          request
-        );
+        return env.ASSETS.fetch(request);
       }
 
-      return new Response(
-        "Aprova Concurso DEV",
-        {
-          status: 200,
-
-          headers: {
-            "Content-Type":
-              "text/plain; charset=utf-8",
-          },
+      return new Response("Aprova Concurso DEV", {
+        status: 200,
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8"
         }
-      );
+      });
     } catch (error) {
-      console.error(
-        "Erro não tratado no Worker:",
-        error
-      );
+      console.error("Erro não tratado no Worker:", error);
 
       return json(
         {
           ok: false,
-
-          erro:
-            obterMensagemErro(
-              error
-            ),
+          erro: obterMensagemErro(error)
         },
         500
       );
     }
-  },
+  }
 };
 
-async function testarWorkersAI(
-  env
-) {
+async function testarWorkersAI(env) {
   try {
-    validarBindingAI(
-      env
-    );
+    validarBindingAI(env);
 
-    const inicio =
-      Date.now();
+    const inicio = Date.now();
 
-    const resultado =
-      await env.AI.run(
-        MODELO_TESTE,
-        {
-          messages: [
-            {
-              role:
-                "system",
-
-              content:
-                "Responda somente com a palavra OK. Não explique.",
-            },
-
-            {
-              role:
-                "user",
-
-              content:
-                "Responda OK.",
-            },
-          ],
-
-          max_completion_tokens:
-            500,
-
-          reasoning_effort:
-            "low",
-
-          temperature:
-            0,
-        }
-      );
-
-    const escolha =
-      resultado
-        ?.choices?.[0] ||
-      null;
-
-    const conteudo =
-      escolha
-        ?.message
-        ?.content ||
-      resultado
-        ?.response ||
-      resultado
-        ?.result ||
-      null;
-
-    return json({
-      ok: true,
-
-      modelo:
-        MODELO_TESTE,
-
-      duracao_ms:
-        Date.now() -
-        inicio,
-
-      teste: {
-        conteudo,
-
-        finish_reason:
-          escolha
-            ?.finish_reason ||
-          null,
-
-        completion_tokens:
-          resultado
-            ?.usage
-            ?.completion_tokens ||
-          null,
-      },
-
-      resultado_completo:
-        resultado,
-    });
-  } catch (error) {
-    console.error(
-      "Falha no teste do Workers AI:",
-      error
-    );
-
-    return json(
+    const resultado = await env.AI.run(
+      MODELO_TESTE,
       {
-        ok: false,
-
-        etapa:
-          "inferencia",
-
-        modelo:
-          MODELO_TESTE,
-
-        erro:
-          obterMensagemErro(
-            error
-          ),
-
-        tipo:
-          error?.name ||
-          null,
-      },
-      500
-    );
-  }
-}
-
-async function analisarEdital(
-  request,
-  env
-) {
-  const inicioTotal =
-    Date.now();
-
-  try {
-    validarBindingAI(
-      env
-    );
-
-    const dados =
-      await lerDadosDaRequisicao(
-        request
-      );
-
-    const textoOriginal =
-      textoSeguro(
-        dados.texto_edital ||
-        dados.textoEdital ||
-        dados.texto ||
-        dados.conteudo
-      );
-
-    const nomeArquivo =
-      textoSeguro(
-        dados.nome_arquivo ||
-        dados.nomeArquivo ||
-        dados.filename
-      );
-
-    const tipoArquivo =
-      textoSeguro(
-        dados.tipo_arquivo ||
-        dados.tipoArquivo ||
-        dados.type
-      );
-
-    if (!textoOriginal) {
-      return json(
-        {
-          ok: false,
-
-          erro:
-            "Nenhum texto foi extraído do edital. Se o PDF for escaneado, aplique OCR antes da análise.",
-        },
-        400
-      );
-    }
-
-    if (
-      textoOriginal.length <
-      100
-    ) {
-      return json(
-        {
-          ok: false,
-
-          erro:
-            "O texto extraído possui menos de 100 caracteres e não é suficiente para verticalizar o edital.",
-        },
-        400
-      );
-    }
-
-    const trechoProgramatico =
-      extrairTrechoConteudoProgramatico(
-        textoOriginal
-      );
-
-    const textoUtil =
-      trechoProgramatico
-        .slice(
-          0,
-          LIMITE_TEXTO_TOTAL
-        )
-        .trim();
-
-    if (
-      textoUtil.length <
-      100
-    ) {
-      return json(
-        {
-          ok: false,
-
-          erro:
-            "Não foi possível localizar conteúdo programático suficiente no arquivo.",
-        },
-        400
-      );
-    }
-
-    const hashTexto =
-      await gerarHashTexto(
-        textoUtil
-      );
-
-    let resultado;
-    let modo;
-    let blocosUsados =
-      1;
-
-    if (
-      textoUtil.length <=
-      LIMITE_CURTO
-    ) {
-      modo =
-        "unico";
-
-      resultado =
-        await analisarEditalCurto(
-          env,
+        messages: [
           {
-            textoEdital:
-              textoUtil,
-
-            nomeArquivo,
-
-            tipoArquivo,
-          }
-        );
-    } else {
-      modo =
-        "blocos_paralelos";
-
-      const blocos =
-        dividirTextoEmBlocos(
-          textoUtil,
-          TAMANHO_BLOCO,
-          SOBREPOSICAO_BLOCO,
-          MAXIMO_BLOCOS
-        );
-
-      blocosUsados =
-        blocos.length;
-
-      resultado =
-        await analisarEditalExtenso(
-          env,
+            role: "system",
+            content: "Responda somente com a palavra OK."
+          },
           {
-            textoCompleto:
-              textoUtil,
-
-            blocos,
-
-            nomeArquivo,
-
-            tipoArquivo,
+            role: "user",
+            content: "Responda OK."
           }
-        );
-    }
-
-    const normalizado =
-      normalizarResultado(
-        resultado
-      );
-
-    return json({
-      ok: true,
-
-      resultado:
-        normalizado,
-
-      resposta:
-        normalizado,
-
-      analise:
-        normalizado,
-
-      arquivo: {
-        nome:
-          nomeArquivo ||
-          null,
-
-        tipo:
-          tipoArquivo ||
-          null,
-
-        caracteres_recebidos:
-          textoOriginal.length,
-
-        caracteres_filtrados:
-          trechoProgramatico.length,
-
-        caracteres_analisados:
-          textoUtil.length,
-
-        texto_cortado:
-          trechoProgramatico.length >
-          LIMITE_TEXTO_TOTAL,
-
-        hash:
-          hashTexto,
-      },
-
-      processamento: {
-        modo,
-
-        blocos:
-          blocosUsados,
-
-        concorrencia:
-          modo ===
-          "blocos_paralelos"
-            ? CONCORRENCIA_IA
-            : 1,
-
-        duracao_ms:
-          Date.now() -
-          inicioTotal,
-      },
-
-      modelo:
-        MODELO_EXTRACAO,
-    });
-  } catch (error) {
-    console.error(
-      "Erro ao analisar edital:",
-      {
-        erro:
-          obterMensagemErro(
-            error
-          ),
-
-        stack:
-          error?.stack ||
-          null,
+        ],
+        max_completion_tokens: 300,
+        reasoning_effort: "low",
+        temperature: 0
       }
     );
 
+    return json({
+      ok: true,
+      modelo: MODELO_TESTE,
+      duracao_ms: Date.now() - inicio,
+      conteudo: extrairConteudoResposta(resultado),
+      resultado_completo: resultado
+    });
+  } catch (error) {
     return json(
       {
         ok: false,
-
-        erro:
-          obterMensagemErro(
-            error
-          ),
-
-        modelo:
-          MODELO_EXTRACAO,
-
-        duracao_ms:
-          Date.now() -
-          inicioTotal,
+        modelo: MODELO_TESTE,
+        erro: obterMensagemErro(error)
       },
       500
     );
   }
 }
 
-async function analisarEditalCurto(
-  env,
-  {
-    textoEdital,
-    nomeArquivo,
-    tipoArquivo,
-  }
-) {
-  const prompt =
-    montarPromptCompleto({
-      textoEdital,
-      nomeArquivo,
-      tipoArquivo,
-    });
+async function analisarEdital(request, env) {
+  const inicio = Date.now();
 
-  const resposta =
-    await executarJsonMode(
-      env,
-      prompt,
-      ESQUEMA_EDITAL_COMPLETO,
-      5000
+  try {
+    validarBindingAI(env);
+
+    const body = await lerJsonRequest(request);
+
+    const textoOriginal = textoSeguro(
+      body.texto_edital ||
+      body.textoEdital ||
+      body.texto ||
+      body.conteudo
     );
 
-  return interpretarRespostaDaIa(
-    resposta
-  );
+    const nomeArquivo = textoSeguro(
+      body.nome_arquivo ||
+      body.nomeArquivo ||
+      body.filename
+    );
+
+    const tipoArquivo = textoSeguro(
+      body.tipo_arquivo ||
+      body.tipoArquivo ||
+      body.type
+    );
+
+    if (!textoOriginal || textoOriginal.length < 100) {
+      return json(
+        {
+          ok: false,
+          erro:
+            "Nenhum texto suficiente foi extraído do edital. " +
+            "PDFs escaneados precisam passar por OCR."
+        },
+        400
+      );
+    }
+
+    const textoLimpo = limparTextoEdital(textoOriginal);
+    const textoUtil = textoLimpo
+      .slice(0, LIMITE_TEXTO_TOTAL)
+      .trim();
+
+    if (textoUtil.length < 100) {
+      return json(
+        {
+          ok: false,
+          erro:
+            "O texto do edital ficou vazio ou insuficiente após a limpeza."
+        },
+        400
+      );
+    }
+
+    let resultado;
+    let modo;
+    let blocosUsados = 1;
+
+    if (textoUtil.length <= LIMITE_CURTO) {
+      modo = "documento_unico";
+
+      resultado = await analisarDocumentoUnico(
+        env,
+        {
+          texto: textoUtil,
+          nomeArquivo,
+          tipoArquivo
+        }
+      );
+    } else {
+      modo = "blocos_multicargos";
+
+      const blocos = dividirTextoEmBlocos(
+        textoUtil,
+        TAMANHO_BLOCO,
+        SOBREPOSICAO_BLOCO,
+        MAXIMO_BLOCOS
+      );
+
+      blocosUsados = blocos.length;
+
+      resultado = await analisarDocumentoExtenso(
+        env,
+        {
+          textoCompleto: textoUtil,
+          blocos,
+          nomeArquivo,
+          tipoArquivo
+        }
+      );
+    }
+
+    const normalizado = normalizarEditalMulticargos(resultado);
+    const hash = await gerarHashTexto(textoUtil);
+
+    return json({
+      ok: true,
+      resultado: normalizado,
+      resposta: normalizado,
+      analise: normalizado,
+      arquivo: {
+        nome: nomeArquivo || null,
+        tipo: tipoArquivo || null,
+        caracteres_recebidos: textoOriginal.length,
+        caracteres_analisados: textoUtil.length,
+        texto_cortado: textoLimpo.length > LIMITE_TEXTO_TOTAL,
+        hash
+      },
+      processamento: {
+        modo,
+        blocos: blocosUsados,
+        duracao_ms: Date.now() - inicio
+      },
+      modelo: MODELO_EXTRACAO
+    });
+  } catch (error) {
+    console.error("Erro ao analisar edital:", error);
+
+    return json(
+      {
+        ok: false,
+        erro: obterMensagemErro(error),
+        modelo: MODELO_EXTRACAO,
+        duracao_ms: Date.now() - inicio
+      },
+      500
+    );
+  }
 }
 
-async function analisarEditalExtenso(
+async function analisarDocumentoUnico(
+  env,
+  {
+    texto,
+    nomeArquivo,
+    tipoArquivo
+  }
+) {
+  const prompt = `
+Você é um especialista em verticalização de editais de concursos públicos.
+
+Analise integralmente o edital abaixo.
+
+OBJETIVO:
+1. Identificar os dados gerais do concurso.
+2. Identificar TODOS os cargos e especialidades.
+3. Para cada cargo, identificar somente as disciplinas aplicáveis a ele.
+4. Para cada disciplina, listar todos os tópicos e subtópicos do conteúdo programático.
+5. Não misturar nomes de cargos com nomes de disciplinas.
+6. Não misturar conteúdos de cargos diferentes.
+7. Não inventar informações ausentes.
+8. Quando um dado não existir, use string vazia ou null.
+9. A data deve estar no formato AAAA-MM-DD.
+10. O status inicial de todos os tópicos deve ser "pendente".
+
+REGRAS DE INTERPRETAÇÃO:
+- "Conhecimentos Gerais" e "Conhecimentos Específicos" são grupos, não cargos.
+- Um cargo pode possuir especialidade.
+- Disciplinas comuns devem aparecer em cada cargo ao qual se aplicam.
+- Preserve a literalidade dos tópicos sempre que possível.
+- Prioridade alta: disciplina específica, de maior peso ou maior número de questões.
+- Prioridade média: disciplina geral relevante.
+- Prioridade baixa: disciplina de menor incidência.
+- Se peso ou quantidade de questões não forem informados, use peso 1 e quantidade_questoes null.
+
+Arquivo: ${nomeArquivo || "não informado"}
+Tipo: ${tipoArquivo || "não informado"}
+
+TEXTO DO EDITAL:
+${texto}
+`;
+
+  const resposta = await executarJsonSchema(
+    env,
+    prompt,
+    ESQUEMA_EDITAL_MULTICARGOS,
+    "edital_multicargos",
+    7600
+  );
+
+  return interpretarRespostaDaIa(resposta);
+}
+
+async function analisarDocumentoExtenso(
   env,
   {
     textoCompleto,
     blocos,
     nomeArquivo,
-    tipoArquivo,
+    tipoArquivo
   }
 ) {
-  const textoMetadados =
-    textoCompleto.slice(
-      0,
-      14000
-    );
+  const trechoInicial = textoCompleto.slice(0, 16000);
 
-  const promessaMetadados =
-    extrairMetadados(
-      env,
-      {
-        textoEdital:
-          textoMetadados,
+  const promessaMetadados = extrairMetadados(
+    env,
+    {
+      texto: trechoInicial,
+      nomeArquivo,
+      tipoArquivo
+    }
+  );
 
-        nomeArquivo,
+  const tarefas = blocos.map(
+    (bloco, indice) =>
+      async () =>
+        analisarBlocoDeCargos(
+          env,
+          {
+            bloco,
+            indice,
+            total: blocos.length
+          }
+        )
+  );
 
-        tipoArquivo,
-      }
-    );
-
-  const promessaBlocos =
-    executarEmLotes(
-      blocos.map(
-        (
-          bloco,
-          indice
-        ) =>
-          async () =>
-            analisarBlocoProgramatico(
-              env,
-              {
-                bloco,
-                indice,
-                total:
-                  blocos.length,
-              }
-            )
-      ),
-
-      CONCORRENCIA_IA
-    );
+  const promessaBlocos = executarEmLotes(
+    tarefas,
+    CONCORRENCIA_IA
+  );
 
   const [
     metadados,
-    resultadosBlocos,
-  ] =
-    await Promise.all([
-      promessaMetadados,
-      promessaBlocos,
-    ]);
+    resultadosBlocos
+  ] = await Promise.all([
+    promessaMetadados,
+    promessaBlocos
+  ]);
 
-  const disciplinas =
-    consolidarDisciplinas(
-      resultadosBlocos.flatMap(
-        (item) =>
-          item.disciplinas ||
-          []
-      )
-    );
+  const cargosBrutos = resultadosBlocos.flatMap(
+    item =>
+      Array.isArray(item?.cargos)
+        ? item.cargos
+        : []
+  );
 
-  if (
-    !disciplinas.length
-  ) {
+  const cargos = consolidarCargos(cargosBrutos);
+
+  if (!cargos.length) {
     throw new Error(
-      "A IA não identificou disciplinas válidas nos blocos do edital."
+      "A IA não conseguiu identificar cargos com disciplinas válidas."
     );
   }
 
   return {
-    concurso:
-      metadados.concurso ||
-      {},
-
-    disciplinas,
-
+    concurso: metadados.concurso || {},
+    cargos,
     estrategia:
-      textoSeguro(
-        metadados.estrategia
-      ) ||
-      criarEstrategiaLocal(
-        disciplinas
-      ),
+      textoSeguro(metadados.estrategia) ||
+      criarEstrategiaMulticargos(cargos)
   };
 }
 
 async function extrairMetadados(
   env,
   {
-    textoEdital,
+    texto,
     nomeArquivo,
-    tipoArquivo,
+    tipoArquivo
   }
 ) {
   const prompt = `
-Extraia somente os metadados gerais do edital abaixo.
-Retorne JSON válido conforme o schema solicitado.
-Não invente dados.
-Use string vazia para informação ausente.
+Extraia somente os dados gerais do concurso.
+
+Não extraia disciplinas.
+Não invente informações.
+Use string vazia quando o dado não estiver presente.
 A data da prova deve usar AAAA-MM-DD.
 
-Arquivo: ${
-  nomeArquivo ||
-  "não informado"
-}
+Arquivo: ${nomeArquivo || "não informado"}
+Tipo: ${tipoArquivo || "não informado"}
 
-Tipo: ${
-  tipoArquivo ||
-  "não informado"
-}
-
-EDITAL:
-
-${textoEdital}
+TEXTO:
+${texto}
 `;
 
-  const resposta =
-    await executarJsonMode(
-      env,
-      prompt,
-      ESQUEMA_METADADOS,
-      1200
-    );
+  const resposta = await executarJsonSchema(
+    env,
+    prompt,
+    ESQUEMA_METADADOS,
+    "metadados_concurso",
+    1600
+  );
 
-  const objeto =
-    interpretarObjetoJson(
-      resposta
-    );
-
-  return {
-    concurso:
-      objeto?.concurso &&
-      typeof objeto.concurso ===
-        "object"
-        ? objeto.concurso
-        : {},
-
-    estrategia:
-      textoSeguro(
-        objeto?.estrategia
-      ),
-  };
+  return interpretarRespostaDaIa(resposta);
 }
 
-async function analisarBlocoProgramatico(
+async function analisarBlocoDeCargos(
   env,
   {
     bloco,
     indice,
-    total,
+    total
   }
 ) {
   const prompt = `
-Você está analisando o bloco ${
-  indice + 1
-} de ${total} do conteúdo programático de um edital.
+Você está analisando o bloco ${indice + 1} de ${total} de um edital de concurso.
 
-Extraia somente disciplinas e seus tópicos que apareçam neste bloco.
-Não invente informações.
-Não repita um tópico apenas porque ele aparece no início e no fim do bloco.
-Quando uma disciplina começar em um bloco e continuar em outro, preserve exatamente o mesmo nome da disciplina.
-A prioridade deve ser alta, media ou baixa.
-O peso deve ser inteiro e no mínimo 1.
-Cada tópico deve conter somente o campo nome.
-Retorne JSON válido conforme o schema solicitado.
+Extraia somente informações realmente presentes neste bloco.
+
+OBJETIVO:
+- Identificar cargos, áreas e especialidades.
+- Vincular as disciplinas ao cargo correto.
+- Extrair os tópicos e subtópicos de cada disciplina.
+- Não tratar cargo como disciplina.
+- Não misturar conteúdos de cargos diferentes.
+- Não inventar dados.
+- Se este bloco não possuir cargos ou conteúdo programático útil, retorne cargos vazio.
+- O status inicial de cada tópico deve ser "pendente".
+- Use peso 1 quando não houver peso expresso.
+- Use quantidade_questoes null quando não houver quantidade expressa.
 
 BLOCO:
-
 ${bloco}
 `;
 
-  const resposta =
-    await executarJsonMode(
-      env,
-      prompt,
-      ESQUEMA_BLOCO,
-      3200
-    );
+  const resposta = await executarJsonSchema(
+    env,
+    prompt,
+    ESQUEMA_BLOCO_CARGOS,
+    `bloco_cargos_${indice + 1}`,
+    5600
+  );
 
-  const objeto =
-    interpretarObjetoJson(
-      resposta
-    );
+  const interpretado = interpretarRespostaDaIa(resposta);
 
   return {
-    disciplinas:
-      Array.isArray(
-        objeto?.disciplinas
-      )
-        ? objeto.disciplinas
-        : [],
+    cargos: Array.isArray(interpretado?.cargos)
+      ? interpretado.cargos
+      : []
   };
 }
 
-async function executarJsonMode(
+async function executarJsonSchema(
   env,
   prompt,
   schema,
+  nomeSchema,
   maxTokens
 ) {
-  try {
-    return await env.AI.run(
-      MODELO_EXTRACAO,
-      {
-        messages: [
-          {
-            role:
-              "system",
+  validarBindingAI(env);
 
-            content:
-              "Extraia dados de editais de concursos públicos. Responda somente com JSON válido.",
-          },
-
-          {
-            role:
-              "user",
-
-            content:
-              prompt,
-          },
-        ],
-
-        response_format: {
-          type:
-            "json_schema",
-
-          json_schema:
-            schema,
-        },
-
-        max_tokens:
-          maxTokens,
-
-        temperature:
-          0,
-      }
-    );
-  } catch (error) {
-    const mensagem =
-      obterMensagemErro(
-        error
-      );
-
-    const erroDeFormato =
-      /json|schema|structured|format/i.test(
-        mensagem
-      );
-
-    if (!erroDeFormato) {
-      throw error;
-    }
-
-    console.warn(
-      "JSON Mode não pôde ser atendido. Tentando JSON simples:",
-      mensagem
-    );
-
-    return env.AI.run(
-      MODELO_EXTRACAO,
-      {
-        messages: [
-          {
-            role:
-              "system",
-
-            content:
-              "Responda exclusivamente com um objeto JSON válido, sem markdown, comentários ou explicações.",
-          },
-
-          {
-            role:
-              "user",
-
-            content:
-              prompt,
-          },
-        ],
-
-        max_tokens:
-          maxTokens,
-
-        temperature:
-          0,
-      }
-    );
-  }
-}
-
-async function executarEmLotes(
-  tarefas,
-  limite
-) {
-  const resultados =
-    [];
-
-  for (
-    let inicio = 0;
-    inicio <
-    tarefas.length;
-    inicio += limite
-  ) {
-    const lote =
-      tarefas.slice(
-        inicio,
-        inicio + limite
-      );
-
-    const respostas =
-      await Promise.all(
-        lote.map(
-          (tarefa) =>
-            tarefa()
-        )
-      );
-
-    resultados.push(
-      ...respostas
-    );
-  }
-
-  return resultados;
-}
-
-function dividirTextoEmBlocos(
-  texto,
-  tamanho,
-  sobreposicao,
-  maximoBlocos
-) {
-  const blocos =
-    [];
-
-  let inicio =
-    0;
-
-  while (
-    inicio <
-      texto.length &&
-    blocos.length <
-      maximoBlocos
-  ) {
-    let fim =
-      Math.min(
-        inicio +
-          tamanho,
-
-        texto.length
-      );
-
-    if (
-      fim <
-      texto.length
-    ) {
-      const janelaInicio =
-        Math.max(
-          inicio +
-            Math.floor(
-              tamanho *
-              0.65
-            ),
-
-          inicio
-        );
-
-      const trechoBusca =
-        texto.slice(
-          janelaInicio,
-          fim
-        );
-
-      const ultimoParagrafo =
-        trechoBusca.lastIndexOf(
-          "\n\n"
-        );
-
-      const ultimaLinha =
-        trechoBusca.lastIndexOf(
-          "\n"
-        );
-
-      const corteLocal =
-        Math.max(
-          ultimoParagrafo,
-          ultimaLinha
-        );
-
-      if (
-        corteLocal >
-        0
-      ) {
-        fim =
-          janelaInicio +
-          corteLocal;
-      }
-    }
-
-    const bloco =
-      texto
-        .slice(
-          inicio,
-          fim
-        )
-        .trim();
-
-    if (bloco) {
-      blocos.push(
-        bloco
-      );
-    }
-
-    if (
-      fim >=
-      texto.length
-    ) {
-      break;
-    }
-
-    inicio =
-      Math.max(
-        fim -
-          sobreposicao,
-
-        inicio +
-          1
-      );
-  }
-
-  if (
-    inicio <
-      texto.length &&
-    blocos.length ===
-      maximoBlocos
-  ) {
-    const restante =
-      texto
-        .slice(
-          inicio
-        )
-        .trim();
-
-    if (restante) {
-      blocos[
-        blocos.length -
-        1
-      ] =
-        `${
-          blocos[
-            blocos.length -
-            1
-          ]
-        }\n\n${restante}`;
-    }
-  }
-
-  return blocos;
-}
-
-function extrairTrechoConteudoProgramatico(
-  texto
-) {
-  const original =
-    textoSeguro(
-      texto
-    );
-
-  if (!original) {
-    return "";
-  }
-
-  const normalizado =
-    removerAcentos(
-      original
-    ).toLowerCase();
-
-  const marcadoresInicio =
-    [
-      "conteudo programatico",
-      "objetos de avaliacao",
-      "conhecimentos gerais",
-      "conhecimentos basicos",
-      "conhecimentos especificos",
-      "programa da prova",
-      "programas das provas",
-      "anexo de conteudos",
-      "anexo dos conteudos",
-    ];
-
-  let inicio =
-    -1;
-
-  for (
-    const marcador
-    of marcadoresInicio
-  ) {
-    const posicao =
-      normalizado.indexOf(
-        marcador
-      );
-
-    if (
-      posicao >=
-        0 &&
-      (
-        inicio ===
-          -1 ||
-        posicao <
-          inicio
-      )
-    ) {
-      inicio =
-        posicao;
-    }
-  }
-
-  if (
-    inicio ===
-    -1
-  ) {
-    return original;
-  }
-
-  const trecho =
-    original.slice(
-      inicio
-    );
-
-  const normalizadoTrecho =
-    removerAcentos(
-      trecho
-    ).toLowerCase();
-
-  const marcadoresFim =
-    [
-      "cronograma de atividades",
-      "calendario de atividades",
-      "modelo de declaracao",
-      "formulario de recurso",
-      "anexo de vagas",
-      "requisitos para investidura",
-    ];
-
-  let fim =
-    trecho.length;
-
-  for (
-    const marcador
-    of marcadoresFim
-  ) {
-    const posicao =
-      normalizadoTrecho.indexOf(
-        marcador,
-        1000
-      );
-
-    if (
-      posicao >
-        0 &&
-      posicao <
-        fim
-    ) {
-      fim =
-        posicao;
-    }
-  }
-
-  return trecho
-    .slice(
-      0,
-      fim
-    )
-    .trim();
-}
-
-function consolidarDisciplinas(
-  disciplinasBrutas
-) {
-  const mapa =
-    new Map();
-
-  for (
-    const item
-    of disciplinasBrutas
-  ) {
-    if (
-      !item ||
-      typeof item !==
-        "object"
-    ) {
-      continue;
-    }
-
-    const nome =
-      textoSeguro(
-        item.nome ||
-        item.materia ||
-        item.disciplina
-      );
-
-    if (!nome) {
-      continue;
-    }
-
-    const chave =
-      chaveComparacao(
-        nome
-      );
-
-    const topicosFonte =
-      Array.isArray(
-        item.topicos
-      )
-        ? item.topicos
-        : Array.isArray(
-            item.assuntos
-          )
-          ? item.assuntos
-          : [];
-
-    if (
-      !mapa.has(
-        chave
-      )
-    ) {
-      mapa.set(
-        chave,
+  return env.AI.run(
+    MODELO_EXTRACAO,
+    {
+      messages: [
         {
-          nome,
-
-          prioridade:
-            normalizarPrioridade(
-              item.prioridade
-            ),
-
-          peso:
-            normalizarPeso(
-              item.peso
-            ),
-
-          topicos:
-            [],
-
-          _topicos:
-            new Set(),
+          role: "system",
+          content:
+            "Retorne somente JSON válido conforme o schema. " +
+            "Não use markdown, comentários ou texto fora do JSON."
+        },
+        {
+          role: "user",
+          content: prompt
         }
-      );
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: nomeSchema,
+          strict: true,
+          schema
+        }
+      },
+      max_completion_tokens: maxTokens,
+      temperature: 0
     }
-
-    const atual =
-      mapa.get(
-        chave
-      );
-
-    atual.prioridade =
-      maiorPrioridade(
-        atual.prioridade,
-
-        normalizarPrioridade(
-          item.prioridade
-        )
-      );
-
-    atual.peso =
-      Math.max(
-        atual.peso,
-
-        normalizarPeso(
-          item.peso
-        )
-      );
-
-    for (
-      const topico
-      of topicosFonte
-    ) {
-      const nomeTopico =
-        textoSeguro(
-          typeof topico ===
-            "string"
-            ? topico
-            : topico?.nome ||
-              topico?.assunto ||
-              topico?.topico ||
-              topico?.conteudo
-        );
-
-      if (!nomeTopico) {
-        continue;
-      }
-
-      const chaveTopico =
-        chaveComparacao(
-          nomeTopico
-        );
-
-      if (
-        !atual
-          ._topicos
-          .has(
-            chaveTopico
-          )
-      ) {
-        atual
-          ._topicos
-          .add(
-            chaveTopico
-          );
-
-        atual
-          .topicos
-          .push({
-            nome:
-              nomeTopico,
-          });
-      }
-    }
-  }
-
-  return Array
-    .from(
-      mapa.values()
-    )
-    .map(
-      ({
-        _topicos,
-        ...disciplina
-      }) =>
-        disciplina
-    )
-    .filter(
-      (disciplina) =>
-        disciplina
-          .topicos
-          .length >
-        0
-    );
+  );
 }
 
-function criarEstrategiaLocal(
-  disciplinas
-) {
-  const altas =
-    disciplinas
-      .filter(
-        (item) =>
-          item.prioridade ===
-          "alta"
-      )
-      .map(
-        (item) =>
-          item.nome
-      )
-      .slice(
-        0,
-        4
-      );
-
-  if (
-    altas.length
-  ) {
-    return `Priorize ${altas.join(
-      ", "
-    )}, intercalando teoria, questões e revisões periódicas.`;
-  }
-
-  return "Estude por ciclos, priorizando as disciplinas de maior peso e revisando os tópicos por questões.";
-}
-
-function maiorPrioridade(
-  a,
-  b
-) {
-  const ordem = {
-    baixa: 1,
-    media: 2,
-    alta: 3,
-  };
-
-  return ordem[b] >
-    ordem[a]
-    ? b
-    : a;
-}
-
-function chaveComparacao(
-  valor
-) {
-  return removerAcentos(
-    textoSeguro(
-      valor
-    )
-  )
-    .toLowerCase()
-    .replace(
-      /[^a-z0-9]+/g,
-      " "
-    )
-    .trim();
-}
-
-function montarPromptCompleto({
-  textoEdital,
-  nomeArquivo,
-  tipoArquivo,
-}) {
-  return `
-Analise o edital de concurso público abaixo.
-
-Extraia concurso, órgão, cargo, banca, data da prova, todas as disciplinas e todos os tópicos e subtópicos do conteúdo programático.
-Não invente informações.
-Use string vazia para informações ausentes.
-A data deve usar AAAA-MM-DD.
-A prioridade deve ser alta, media ou baixa.
-O peso deve ser inteiro e no mínimo 1.
-Cada tópico deve conter somente o campo nome.
-Retorne JSON válido conforme o schema solicitado.
-
-Arquivo: ${
-  nomeArquivo ||
-  "não informado"
-}
-
-Tipo: ${
-  tipoArquivo ||
-  "não informado"
-}
-
-EDITAL:
-
-${textoEdital}
-`;
-}
-
-function interpretarRespostaDaIa(
-  resposta
-) {
-  const objeto =
-    interpretarObjetoJson(
-      resposta
-    );
-
-  if (
-    !possuiEstruturaDeEdital(
-      objeto
-    )
-  ) {
-    throw new Error(
-      "A resposta da IA não contém uma verticalização reconhecível."
-    );
-  }
-
-  return objeto;
-}
-
-function interpretarObjetoJson(
-  resposta
-) {
+function interpretarRespostaDaIa(resposta) {
   if (!resposta) {
-    throw new Error(
-      "A IA retornou uma resposta vazia."
-    );
+    throw new Error("A IA retornou uma resposta vazia.");
   }
 
-  if (
-    typeof resposta ===
-      "object" &&
-    !Array.isArray(
-      resposta
-    )
-  ) {
+  const candidatos = [
+    resposta.parsed,
+    resposta.result,
+    resposta.response,
+    resposta.output,
+    resposta?.choices?.[0]?.message?.parsed,
+    resposta?.choices?.[0]?.message?.content
+  ];
+
+  for (const candidato of candidatos) {
     if (
-      resposta.response &&
-      typeof resposta.response ===
-        "object"
+      candidato &&
+      typeof candidato === "object" &&
+      !Array.isArray(candidato)
     ) {
-      return resposta.response;
-    }
-
-    const parsed =
-      resposta
-        ?.choices?.[0]
-        ?.message
-        ?.parsed;
-
-    if (
-      parsed &&
-      typeof parsed ===
-        "object"
-    ) {
-      return parsed;
-    }
-
-    const conteudo =
-      resposta
-        ?.choices?.[0]
-        ?.message
-        ?.content;
-
-    if (
-      typeof conteudo ===
-        "string" &&
-      conteudo.trim()
-    ) {
-      return extrairJson(
-        conteudo
-      );
+      return candidato;
     }
 
     if (
-      typeof resposta.response ===
-      "string"
+      typeof candidato === "string" &&
+      candidato.trim()
     ) {
-      return extrairJson(
-        resposta.response
-      );
-    }
+      const objeto = extrairJson(candidato);
 
-    if (
-      typeof resposta.result ===
-      "string"
-    ) {
-      return extrairJson(
-        resposta.result
-      );
-    }
-
-    if (
-      resposta.result &&
-      typeof resposta.result ===
-        "object"
-    ) {
-      return resposta.result;
-    }
-
-    if (
-      !Object
-        .prototype
-        .hasOwnProperty
-        .call(
-          resposta,
-          "choices"
-        ) &&
-      !Object
-        .prototype
-        .hasOwnProperty
-        .call(
-          resposta,
-          "response"
-        )
-    ) {
-      return resposta;
+      if (objeto) {
+        return objeto;
+      }
     }
   }
 
   throw new Error(
-    "A IA respondeu em um formato JSON não reconhecido."
+    "A IA respondeu, mas não foi possível interpretar o JSON."
   );
 }
 
-function possuiEstruturaDeEdital(
-  valor
-) {
-  return Boolean(
-    valor &&
-    typeof valor ===
-      "object" &&
-    !Array.isArray(
-      valor
-    ) &&
-    Array.isArray(
-      valor.disciplinas
-    ) &&
-    valor.disciplinas
-      .length >
-      0
+function extrairConteudoResposta(resposta) {
+  return (
+    resposta?.choices?.[0]?.message?.content ||
+    resposta?.response ||
+    resposta?.result ||
+    resposta?.output ||
+    null
   );
 }
 
-function extrairJson(
-  valor
-) {
-  const texto =
-    textoSeguro(
-      valor
-    );
+function extrairJson(texto) {
+  const bruto = String(texto || "").trim();
 
-  if (!texto) {
-    throw new Error(
-      "A IA retornou texto vazio."
-    );
+  if (!bruto) {
+    return null;
   }
 
-  const semMarkdown =
-    texto
-      .replace(
-        /^```(?:json)?\s*/i,
-        ""
-      )
-      .replace(
-        /\s*```$/i,
-        ""
-      )
-      .trim();
+  try {
+    return JSON.parse(bruto);
+  } catch (_) {}
 
-  for (
-    const candidato
-    of [
-      texto,
-      semMarkdown,
-    ]
-  ) {
+  const semMarkdown = bruto
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+
+  try {
+    return JSON.parse(semMarkdown);
+  } catch (_) {}
+
+  const inicio = semMarkdown.indexOf("{");
+  const fim = semMarkdown.lastIndexOf("}");
+
+  if (inicio >= 0 && fim > inicio) {
     try {
       return JSON.parse(
-        candidato
+        semMarkdown.slice(inicio, fim + 1)
       );
-    } catch {
-      // Continua.
-    }
+    } catch (_) {}
   }
 
-  const inicio =
-    semMarkdown.indexOf(
-      "{"
-    );
-
-  const fim =
-    semMarkdown.lastIndexOf(
-      "}"
-    );
-
-  if (
-    inicio <
-      0 ||
-    fim <=
-      inicio
-  ) {
-    throw new Error(
-      "JSON não reconhecido na resposta da IA."
-    );
-  }
-
-  return JSON.parse(
-    semMarkdown.slice(
-      inicio,
-      fim + 1
-    )
-  );
+  return null;
 }
 
-function normalizarResultado(
-  resultado
-) {
-  if (
-    !resultado ||
-    typeof resultado !==
-      "object" ||
-    Array.isArray(
-      resultado
-    )
-  ) {
-    throw new Error(
-      "A estrutura retornada pela IA é inválida."
-    );
-  }
-
-  const concurso =
-    resultado.concurso &&
-    typeof resultado.concurso ===
-      "object"
+function normalizarEditalMulticargos(resultado) {
+  const concursoBruto =
+    resultado?.concurso &&
+    typeof resultado.concurso === "object"
       ? resultado.concurso
       : {};
 
-  const origem =
-    Array.isArray(
-      resultado.disciplinas
-    )
-      ? resultado.disciplinas
-      : Array.isArray(
-          resultado.materias
-        )
-        ? resultado.materias
-        : [];
+  let cargosBrutos = Array.isArray(resultado?.cargos)
+    ? resultado.cargos
+    : [];
 
-  const disciplinas =
-    consolidarDisciplinas(
-      origem
-    ).map(
-      (
-        disciplina,
-        indice
-      ) => ({
-        nome:
-          disciplina.nome,
-
-        prioridade:
-          normalizarPrioridade(
-            disciplina.prioridade
-          ),
-
-        peso:
-          normalizarPeso(
-            disciplina.peso
-          ),
-
-        ordem:
-          indice,
-
-        topicos:
-          disciplina
-            .topicos
-            .map(
-              (
-                topico,
-                ordem
-              ) => ({
-                nome:
-                  textoSeguro(
-                    topico.nome
-                  ),
-
-                concluido:
-                  false,
-
-                status:
-                  "pendente",
-
-                ordem,
-              })
-            ),
-      })
-    );
-
+  /*
+   * Compatibilidade com respostas antigas que possuíam apenas
+   * concurso.cargo e disciplinas na raiz.
+   */
   if (
-    !disciplinas.length
+    !cargosBrutos.length &&
+    Array.isArray(resultado?.disciplinas)
   ) {
+    cargosBrutos = [
+      {
+        codigo: "",
+        nome:
+          textoSeguro(concursoBruto.cargo) ||
+          "Cargo não identificado",
+        especialidade: "",
+        nivel: "",
+        requisitos: "",
+        vagas: null,
+        disciplinas: resultado.disciplinas
+      }
+    ];
+  }
+
+  const cargos = consolidarCargos(cargosBrutos);
+
+  if (!cargos.length) {
     throw new Error(
-      "A IA não retornou disciplinas com tópicos válidos."
+      "A IA não retornou cargos com disciplinas e tópicos válidos."
     );
   }
 
   return {
     concurso: {
       nome:
-        textoSeguro(
-          concurso.nome ||
-          concurso.titulo ||
-          resultado.nome_concurso
-        ),
-
+        textoSeguro(concursoBruto.nome) ||
+        "Concurso importado por IA",
       orgao:
-        textoSeguro(
-          concurso.orgao ||
-          concurso["órgão"] ||
-          resultado.orgao
-        ),
-
-      cargo:
-        textoSeguro(
-          concurso.cargo ||
-          resultado.cargo
-        ),
-
+        textoSeguro(concursoBruto.orgao),
       banca:
+        textoSeguro(concursoBruto.banca),
+      numero_edital:
         textoSeguro(
-          concurso.banca ||
-          resultado.banca
+          concursoBruto.numero_edital ||
+          concursoBruto.numero
         ),
-
       data_prova:
         normalizarData(
-          concurso.data_prova ||
-          concurso.prova ||
-          resultado.data_prova
-        ),
+          concursoBruto.data_prova ||
+          concursoBruto.prova
+        )
     },
-
-    disciplinas,
-
+    cargos,
     estrategia:
-      textoSeguro(
-        resultado.estrategia ||
-        concurso.estrategia
-      ) ||
-      criarEstrategiaLocal(
-        disciplinas
-      ),
+      textoSeguro(resultado?.estrategia) ||
+      criarEstrategiaMulticargos(cargos)
   };
 }
 
-async function salvarEdital(
-  request,
-  env
-) {
-  try {
-    validarSupabase(
-      env
-    );
+function consolidarCargos(cargosBrutos) {
+  const mapa = new Map();
 
-    const contentType =
-      textoSeguro(
-        request.headers.get(
-          "content-type"
-        )
-      ).toLowerCase();
-
-    if (
-      !contentType.includes(
-        "application/json"
-      )
-    ) {
-      return json(
-        {
-          ok: false,
-
-          erro:
-            "A rota salvar-edital aceita somente application/json.",
-        },
-        415
-      );
+  for (const cargoBruto of cargosBrutos || []) {
+    if (!cargoBruto || typeof cargoBruto !== "object") {
+      continue;
     }
 
-    const body =
-      await request.json();
+    const nome = textoSeguro(
+      cargoBruto.nome ||
+      cargoBruto.cargo
+    );
 
-    const dados =
-      normalizarResultado(
-        body.resultado ||
-        body.analise ||
-        body.resposta ||
-        body
-      );
+    const especialidade = textoSeguro(
+      cargoBruto.especialidade ||
+      cargoBruto.area
+    );
 
-    const userId =
-      textoSeguro(
-        body.user_id ||
-        body.userId
-      );
+    if (!nome && !especialidade) {
+      continue;
+    }
 
-    const concursoId =
-      textoSeguro(
-        body.concurso_id ||
-        body.concursoId
-      );
+    const chave = normalizarChave(
+      `${nome}|${especialidade}`
+    );
+
+    if (!chave) {
+      continue;
+    }
+
+    const disciplinas = consolidarDisciplinas(
+      cargoBruto.disciplinas
+    );
+
+    if (!mapa.has(chave)) {
+      mapa.set(chave, {
+        codigo: textoSeguro(cargoBruto.codigo),
+        nome: nome || especialidade,
+        especialidade:
+          especialidade &&
+          normalizarChave(especialidade) !== normalizarChave(nome)
+            ? especialidade
+            : "",
+        nivel: textoSeguro(cargoBruto.nivel),
+        requisitos: textoSeguro(cargoBruto.requisitos),
+        vagas: normalizarInteiroOuNull(cargoBruto.vagas),
+        disciplinas
+      });
+
+      continue;
+    }
+
+    const existente = mapa.get(chave);
+
+    existente.codigo =
+      existente.codigo ||
+      textoSeguro(cargoBruto.codigo);
+
+    existente.nivel =
+      existente.nivel ||
+      textoSeguro(cargoBruto.nivel);
+
+    existente.requisitos =
+      existente.requisitos ||
+      textoSeguro(cargoBruto.requisitos);
+
+    existente.vagas =
+      existente.vagas ??
+      normalizarInteiroOuNull(cargoBruto.vagas);
+
+    existente.disciplinas = consolidarDisciplinas([
+      ...existente.disciplinas,
+      ...disciplinas
+    ]);
+  }
+
+  return Array.from(mapa.values())
+    .filter(cargo => cargo.disciplinas.length)
+    .sort((a, b) =>
+      `${a.nome} ${a.especialidade}`.localeCompare(
+        `${b.nome} ${b.especialidade}`,
+        "pt-BR"
+      )
+    );
+}
+
+function consolidarDisciplinas(disciplinasBrutas) {
+  const mapa = new Map();
+
+  for (const disciplinaBruta of disciplinasBrutas || []) {
+    if (!disciplinaBruta) {
+      continue;
+    }
+
+    const nome = textoSeguro(
+      typeof disciplinaBruta === "string"
+        ? disciplinaBruta
+        : disciplinaBruta.nome
+    );
+
+    if (!nome) {
+      continue;
+    }
+
+    const chave = normalizarChave(nome);
+
+    const topicos = normalizarTopicos(
+      typeof disciplinaBruta === "object"
+        ? disciplinaBruta.topicos
+        : []
+    );
+
+    if (!topicos.length) {
+      continue;
+    }
+
+    const disciplina = {
+      nome,
+      grupo:
+        textoSeguro(disciplinaBruta.grupo) ||
+        "Conteúdo programático",
+      prioridade: normalizarPrioridade(
+        disciplinaBruta.prioridade
+      ),
+      peso: normalizarPeso(
+        disciplinaBruta.peso
+      ),
+      quantidade_questoes: normalizarInteiroOuNull(
+        disciplinaBruta.quantidade_questoes ||
+        disciplinaBruta.numero_questoes
+      ),
+      topicos
+    };
+
+    if (!mapa.has(chave)) {
+      mapa.set(chave, disciplina);
+      continue;
+    }
+
+    const existente = mapa.get(chave);
+
+    existente.grupo =
+      existente.grupo !== "Conteúdo programático"
+        ? existente.grupo
+        : disciplina.grupo;
+
+    existente.prioridade = maiorPrioridade(
+      existente.prioridade,
+      disciplina.prioridade
+    );
+
+    existente.peso = Math.max(
+      existente.peso,
+      disciplina.peso
+    );
+
+    existente.quantidade_questoes =
+      existente.quantidade_questoes ??
+      disciplina.quantidade_questoes;
+
+    existente.topicos = normalizarTopicos([
+      ...existente.topicos,
+      ...disciplina.topicos
+    ]);
+  }
+
+  return Array.from(mapa.values());
+}
+
+function normalizarTopicos(topicosBrutos) {
+  const mapa = new Map();
+
+  for (const topicoBruto of topicosBrutos || []) {
+    const nome = textoSeguro(
+      typeof topicoBruto === "string"
+        ? topicoBruto
+        : topicoBruto?.nome
+    );
+
+    if (!nome) {
+      continue;
+    }
+
+    const chave = normalizarChave(nome);
+
+    if (!chave || mapa.has(chave)) {
+      continue;
+    }
+
+    mapa.set(chave, {
+      nome,
+      status:
+        topicoBruto?.status === "concluido"
+          ? "concluido"
+          : "pendente"
+    });
+  }
+
+  return Array.from(mapa.values());
+}
+
+async function salvarEdital(request, env) {
+  try {
+    validarSupabase(env);
+
+    const body = await lerJsonRequest(request);
+
+    const userId = textoSeguro(
+      body.user_id ||
+      body.userId
+    );
+
+    const concursoId = textoSeguro(
+      body.concurso_id ||
+      body.concursoId
+    );
 
     if (!userId) {
       return json(
         {
           ok: false,
-
-          erro:
-            "O campo user_id é obrigatório.",
+          erro: "O campo user_id é obrigatório."
         },
         400
       );
@@ -2057,71 +1102,144 @@ async function salvarEdital(
       return json(
         {
           ok: false,
-
-          erro:
-            "O campo concurso_id é obrigatório.",
+          erro: "O campo concurso_id é obrigatório."
         },
         400
       );
     }
 
-    const resultado =
-      await supabaseRpc(
-        env,
-        "salvar_edital_verticalizado",
-        {
-          p_user_id:
-            userId,
+    const fonte =
+      body.resultado ||
+      body.analise ||
+      body.resposta ||
+      body;
 
-          p_concurso_id:
-            concursoId,
+    const dados = normalizarParaSalvamento(fonte);
 
-          p_dados:
-            dados,
-        }
-      );
-
-    return json(
-      resultado &&
-      typeof resultado ===
-        "object"
-        ? resultado
-        : {
-            ok: true,
-
-            mensagem:
-              "Edital verticalizado salvo com sucesso.",
-
-            resultado,
-          }
-    );
-  } catch (error) {
-    console.error(
-      "Erro ao salvar edital:",
+    const resultado = await supabaseRpc(
+      env,
+      "salvar_edital_verticalizado",
       {
-        erro:
-          obterMensagemErro(
-            error
-          ),
-
-        stack:
-          error?.stack ||
-          null,
+        p_user_id: userId,
+        p_concurso_id: concursoId,
+        p_dados: dados
       }
     );
+
+    const retorno =
+      resultado &&
+      typeof resultado === "object" &&
+      !Array.isArray(resultado)
+        ? resultado
+        : {
+            resultado
+          };
+
+    return json({
+      ok: retorno.ok !== false,
+      mensagem:
+        retorno.mensagem ||
+        "Edital verticalizado salvo com sucesso.",
+      concurso_id:
+        retorno.concurso_id ||
+        concursoId,
+      disciplinas_salvas:
+        retorno.disciplinas_salvas ??
+        dados.disciplinas.length,
+      topicos_salvos:
+        retorno.topicos_salvos ??
+        contarTopicos(dados.disciplinas),
+      resultado: retorno
+    });
+  } catch (error) {
+    console.error("Erro ao salvar edital:", error);
 
     return json(
       {
         ok: false,
-
-        erro:
-          obterMensagemErro(
-            error
-          ),
+        erro: obterMensagemErro(error)
       },
       500
     );
   }
+}
+
+function normalizarParaSalvamento(fonte) {
+  if (!fonte || typeof fonte !== "object") {
+    throw new Error(
+      "Os dados enviados para salvamento são inválidos."
+    );
+  }
+
+  /*
+   * O frontend multicargos deve enviar o cargo já selecionado
+   * no formato antigo: concurso + disciplinas.
+   */
+  if (
+    fonte.concurso &&
+    Array.isArray(fonte.disciplinas)
+  ) {
+    const disciplinas = consolidarDisciplinas(
+      fonte.disciplinas
+    );
+
+    if (!disciplinas.length) {
+      throw new Error(
+        "O cargo selecionado não possui disciplinas válidas."
+      );
+    }
+
+    return {
+      concurso: {
+        nome:
+          textoSeguro(fonte.concurso.nome) ||
+          "Concurso importado por IA",
+        orgao: textoSeguro(fonte.concurso.orgao),
+        cargo: textoSeguro(fonte.concurso.cargo),
+        banca: textoSeguro(fonte.concurso.banca),
+        data_prova: normalizarData(
+          fonte.concurso.data_prova ||
+          fonte.concurso.prova
+        )
+      },
+      disciplinas,
+      estrategia:
+        textoSeguro(fonte.estrategia) ||
+        criarEstrategiaDisciplinas(disciplinas)
+    };
+  }
+
+  /*
+   * Segurança adicional: aceita o edital multicargos somente
+   * quando houver exatamente um cargo.
+   */
+  if (Array.isArray(fonte.cargos)) {
+    const edital = normalizarEditalMulticargos(fonte);
+
+    if (edital.cargos.length !== 1) {
+      throw new Error(
+        "Selecione um cargo antes de salvar o edital."
+      );
+    }
+
+    const cargo = edital.cargos[0];
+
+    return {
+      concurso: {
+        nome: edital.concurso.nome,
+        orgao: edital.concurso.orgao,
+        cargo: montarNomeCargo(cargo),
+        banca: edital.concurso.banca,
+        data_prova: edital.concurso.data_prova
+      },
+      disciplinas: cargo.disciplinas,
+      estrategia: edital.estrategia
+    };
+  }
+
+  throw new Error(
+    "O formato recebido não contém um cargo selecionado."
+  );
 }
 
 async function supabaseRpc(
@@ -2129,359 +1247,280 @@ async function supabaseRpc(
   nomeFuncao,
   parametros
 ) {
-  const response =
-    await fetch(
-      `${obterSupabaseUrl(
-        env
-      )}/rest/v1/rpc/${nomeFuncao}`,
-      {
-        method:
-          "POST",
+  const endpoint =
+    `${obterSupabaseUrl(env)}/rest/v1/rpc/${nomeFuncao}`;
 
-        headers: {
-          ...supabaseHeaders(
-            env
-          ),
+  let response;
 
-          Prefer:
-            "return=representation",
-        },
-
-        body:
-          JSON.stringify(
-            parametros
-          ),
-      }
-    );
-
-  const data =
-    await lerRespostaHttp(
-      response
-    );
-
-  if (
-    !response.ok
-  ) {
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        ...supabaseHeaders(env),
+        Prefer: "return=representation"
+      },
+      body: JSON.stringify(parametros)
+    });
+  } catch (error) {
     throw new Error(
-      `Erro na função ${nomeFuncao}: ${JSON.stringify(
-        data
-      )}`
+      `Falha de rede ao acessar o Supabase: ${obterMensagemErro(error)}`
+    );
+  }
+
+  const data = await lerRespostaHttp(response);
+
+  if (!response.ok) {
+    throw new Error(
+      `Supabase respondeu HTTP ${response.status}: ${
+        typeof data === "string"
+          ? data
+          : JSON.stringify(data)
+      }`
     );
   }
 
   return data;
 }
 
-async function gerarHashTexto(
-  texto
-) {
-  const bytes =
-    new TextEncoder()
-      .encode(
-        texto
-      );
-
-  const hash =
-    await crypto
-      .subtle
-      .digest(
-        "SHA-256",
-        bytes
-      );
-
-  return Array
-    .from(
-      new Uint8Array(
-        hash
-      )
-    )
-    .map(
-      (byte) =>
-        byte
-          .toString(
-            16
-          )
-          .padStart(
-            2,
-            "0"
-          )
-    )
-    .join(
-      ""
-    );
-}
-
-async function lerDadosDaRequisicao(
-  request
-) {
-  const contentType =
-    textoSeguro(
-      request.headers.get(
-        "content-type"
-      )
-    ).toLowerCase();
-
-  if (
-    contentType.includes(
-      "application/json"
-    )
-  ) {
-    const body =
-      await request.json();
-
-    if (
-      !body ||
-      typeof body !==
-        "object" ||
-      Array.isArray(
-        body
-      )
-    ) {
-      throw new Error(
-        "O corpo JSON possui estrutura inválida."
-      );
-    }
-
-    return body;
-  }
-
-  if (
-    contentType.includes(
-      "multipart/form-data"
-    ) ||
-    contentType.includes(
-      "application/x-www-form-urlencoded"
-    )
-  ) {
-    const formData =
-      await request.formData();
-
-    const dados = {};
-
-    for (
-      const [
-        chave,
-        valor,
-      ]
-      of formData.entries()
-    ) {
-      if (
-        typeof valor ===
-        "string"
-      ) {
-        dados[chave] =
-          valor;
-      }
-    }
-
-    const arquivo =
-      formData.get(
-        "arquivo"
-      );
-
-    if (
-      arquivo &&
-      typeof arquivo.text ===
-        "function"
-    ) {
-      dados.texto_edital =
-        await arquivo.text();
-
-      dados.nome_arquivo =
-        arquivo.name ||
-        "";
-
-      dados.tipo_arquivo =
-        arquivo.type ||
-        "";
-    }
-
-    return dados;
-  }
-
-  if (
-    contentType.includes(
-      "text/plain"
-    )
-  ) {
-    return {
-      texto_edital:
-        await request.text(),
-
-      tipo_arquivo:
-        "text/plain",
-    };
-  }
-
-  throw new Error(
-    `Content-Type não suportado: ${
-      contentType ||
-      "não informado"
-    }.`
-  );
-}
-
-function validarBindingAI(
-  env
-) {
-  if (!env.AI) {
-    throw new Error(
-      "Binding Workers AI não encontrado."
-    );
-  }
-}
-
-function validarSupabase(
-  env
-) {
-  if (
-    !textoSeguro(
-      env.SUPABASE_URL
-    ) ||
-    !textoSeguro(
-      env.SUPABASE_SERVICE_ROLE_KEY
-    )
-  ) {
-    throw new Error(
-      "Variáveis do Supabase não configuradas na Cloudflare."
-    );
-  }
-}
-
-function obterSupabaseUrl(
-  env
-) {
-  return textoSeguro(
-    env.SUPABASE_URL
-  ).replace(
-    /\/+$/,
-    ""
-  );
-}
-
-function supabaseHeaders(
-  env
-) {
-  const chave =
-    textoSeguro(
-      env.SUPABASE_SERVICE_ROLE_KEY
-    );
-
-  if (!chave) {
-    throw new Error(
-      "SUPABASE_SERVICE_ROLE_KEY está vazia."
-    );
-  }
-
-  const headers = {
-    apikey:
-      chave,
-
-    "Content-Type":
-      "application/json",
-  };
-
-  if (
-    chave
-      .split(
-        "."
-      )
-      .length ===
-    3
-  ) {
-    headers.Authorization =
-      `Bearer ${chave}`;
-  }
-
-  return headers;
-}
-
-async function lerRespostaHttp(
-  response
-) {
-  const texto =
-    await response.text();
+async function lerRespostaHttp(response) {
+  const texto = await response.text();
 
   if (!texto) {
     return null;
   }
 
   try {
-    return JSON.parse(
-      texto
-    );
-  } catch {
+    return JSON.parse(texto);
+  } catch (_) {
     return texto;
   }
 }
 
-function normalizarPrioridade(
-  valor
+function dividirTextoEmBlocos(
+  texto,
+  tamanho,
+  sobreposicao,
+  maximo
 ) {
-  const prioridade =
-    removerAcentos(
-      textoSeguro(
-        valor ||
-        "media"
-      )
-    ).toLowerCase();
+  const blocos = [];
+  let inicio = 0;
 
-  return prioridade ===
-    "alta" ||
-    prioridade ===
-      "baixa"
-    ? prioridade
-    : "media";
-}
-
-function normalizarPeso(
-  valor
-) {
-  const peso =
-    Number(
-      valor
+  while (
+    inicio < texto.length &&
+    blocos.length < maximo
+  ) {
+    let fim = Math.min(
+      inicio + tamanho,
+      texto.length
     );
 
-  return Number.isFinite(
-    peso
-  ) &&
-    peso >=
-      1
-    ? Math.round(
-        peso
-      )
-    : 1;
+    if (fim < texto.length) {
+      const candidatos = [
+        texto.lastIndexOf("\n\n", fim),
+        texto.lastIndexOf("\n", fim),
+        texto.lastIndexOf(". ", fim)
+      ].filter(posicao => posicao > inicio + tamanho * 0.65);
+
+      if (candidatos.length) {
+        fim = Math.max(...candidatos) + 1;
+      }
+    }
+
+    const bloco = texto.slice(inicio, fim).trim();
+
+    if (bloco) {
+      blocos.push(bloco);
+    }
+
+    if (fim >= texto.length) {
+      break;
+    }
+
+    inicio = Math.max(
+      fim - sobreposicao,
+      inicio + 1
+    );
+  }
+
+  return blocos;
 }
 
-function normalizarData(
-  valor
+async function executarEmLotes(
+  tarefas,
+  concorrencia
 ) {
-  const texto =
-    textoSeguro(
-      valor
-    );
+  const resultados = new Array(tarefas.length);
+  let proximo = 0;
+
+  async function executar() {
+    while (true) {
+      const indice = proximo;
+      proximo += 1;
+
+      if (indice >= tarefas.length) {
+        return;
+      }
+
+      resultados[indice] = await tarefas[indice]();
+    }
+  }
+
+  const quantidade = Math.min(
+    concorrencia,
+    tarefas.length
+  );
+
+  await Promise.all(
+    Array.from(
+      { length: quantidade },
+      () => executar()
+    )
+  );
+
+  return resultados;
+}
+
+function limparTextoEdital(texto) {
+  return String(texto || "")
+    .replace(/\u0000/g, "")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trim();
+}
+
+function criarEstrategiaMulticargos(cargos) {
+  const totalCargos = cargos.length;
+
+  return (
+    `Foram identificados ${totalCargos} cargo(s). ` +
+    "Selecione o cargo desejado antes de gerar a grade. " +
+    "Priorize disciplinas específicas e de maior peso, " +
+    "intercalando teoria, questões e revisões periódicas."
+  );
+}
+
+function criarEstrategiaDisciplinas(disciplinas) {
+  return (
+    "Estude por ciclos, priorizando as disciplinas de maior peso, " +
+    "resolva questões após cada bloco teórico e programe revisões " +
+    "de curto, médio e longo prazo."
+  );
+}
+
+function contarTopicos(disciplinas) {
+  return (disciplinas || []).reduce(
+    (total, disciplina) =>
+      total +
+      (Array.isArray(disciplina.topicos)
+        ? disciplina.topicos.length
+        : 0),
+    0
+  );
+}
+
+function montarNomeCargo(cargo) {
+  return [
+    textoSeguro(cargo?.nome),
+    textoSeguro(cargo?.especialidade)
+  ]
+    .filter(Boolean)
+    .join(" — ");
+}
+
+function maiorPrioridade(a, b) {
+  const ordem = {
+    alta: 3,
+    media: 2,
+    baixa: 1
+  };
+
+  return ordem[b] > ordem[a]
+    ? b
+    : a;
+}
+
+function normalizarPrioridade(valor) {
+  const chave = normalizarChave(valor);
 
   if (
-    /^\d{4}-\d{2}-\d{2}$/.test(
-      texto
-    )
+    chave === "alta" ||
+    chave.includes("alta")
   ) {
-    return texto;
+    return "alta";
   }
 
   if (
-    /^\d{2}\/\d{2}\/\d{4}$/.test(
-      texto
-    )
+    chave === "baixa" ||
+    chave.includes("baixa")
   ) {
-    const [
-      dia,
-      mes,
-      ano,
-    ] =
-      texto.split(
-        "/"
-      );
+    return "baixa";
+  }
+
+  return "media";
+}
+
+function normalizarPeso(valor) {
+  const numero = Number(valor);
+
+  if (
+    Number.isFinite(numero) &&
+    numero >= 1
+  ) {
+    return Math.max(
+      1,
+      Math.round(numero)
+    );
+  }
+
+  return 1;
+}
+
+function normalizarInteiroOuNull(valor) {
+  if (
+    valor === null ||
+    valor === undefined ||
+    valor === ""
+  ) {
+    return null;
+  }
+
+  const numero = Number(valor);
+
+  if (!Number.isFinite(numero)) {
+    return null;
+  }
+
+  return Math.max(
+    0,
+    Math.round(numero)
+  );
+}
+
+function normalizarData(valor) {
+  const texto = textoSeguro(valor);
+
+  if (!texto) {
+    return "";
+  }
+
+  const iso = texto.match(
+    /^(\d{4})-(\d{2})-(\d{2})$/
+  );
+
+  if (iso) {
+    return texto;
+  }
+
+  const brasileira = texto.match(
+    /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/
+  );
+
+  if (brasileira) {
+    const dia = brasileira[1].padStart(2, "0");
+    const mes = brasileira[2].padStart(2, "0");
+    const ano = brasileira[3];
 
     return `${ano}-${mes}-${dia}`;
   }
@@ -2489,81 +1528,137 @@ function normalizarData(
   return "";
 }
 
-function removerAcentos(
-  valor
-) {
-  return textoSeguro(
-    valor
-  )
-    .normalize(
-      "NFD"
+function normalizarChave(valor) {
+  return textoSeguro(valor)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function textoSeguro(valor) {
+  if (
+    valor === null ||
+    valor === undefined
+  ) {
+    return "";
+  }
+
+  return String(valor).trim();
+}
+
+async function gerarHashTexto(texto) {
+  const bytes = new TextEncoder().encode(texto);
+
+  const hash = await crypto.subtle.digest(
+    "SHA-256",
+    bytes
+  );
+
+  return Array.from(new Uint8Array(hash))
+    .map(byte =>
+      byte
+        .toString(16)
+        .padStart(2, "0")
     )
-    .replace(
-      /[\u0300-\u036f]/g,
-      ""
+    .join("");
+}
+
+async function lerJsonRequest(request) {
+  const contentType = textoSeguro(
+    request.headers.get("content-type")
+  ).toLowerCase();
+
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      "Esta rota aceita somente application/json."
     );
+  }
+
+  try {
+    return await request.json();
+  } catch (_) {
+    throw new Error(
+      "O corpo da requisição não contém JSON válido."
+    );
+  }
 }
 
-function textoSeguro(
-  valor
-) {
-  return valor ===
-      null ||
-    valor ===
-      undefined
-    ? ""
-    : String(
-        valor
-      ).trim();
+function validarBindingAI(env) {
+  if (!env?.AI) {
+    throw new Error(
+      "O binding AI não está configurado no Worker."
+    );
+  }
 }
 
-function obterMensagemErro(
-  error
-) {
-  return error instanceof
-    Error
-    ? error.message
-    : textoSeguro(
-        error ||
-        "Erro desconhecido."
-      );
+function validarSupabase(env) {
+  if (!env?.SUPABASE_URL) {
+    throw new Error(
+      "SUPABASE_URL não está configurada."
+    );
+  }
+
+  if (!env?.SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY não está configurada."
+    );
+  }
+}
+
+function obterSupabaseUrl(env) {
+  return textoSeguro(env.SUPABASE_URL)
+    .replace(/\/+$/, "");
+}
+
+function supabaseHeaders(env) {
+  return {
+    apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+    Authorization:
+      `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+    "Content-Type": "application/json"
+  };
 }
 
 function corsHeaders() {
   return {
-    "Access-Control-Allow-Origin":
-      "*",
-
+    "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods":
-      "GET, POST, PATCH, DELETE, OPTIONS",
-
+      "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers":
-      "Content-Type, Authorization",
+      "Content-Type, Authorization, apikey, X-Requested-With",
+    "Access-Control-Max-Age": "86400"
   };
 }
 
-function json(
-  data,
-  status = 200
-) {
+function json(dados, status = 200) {
   return new Response(
-    JSON.stringify(
-      data,
-      null,
-      2
-    ),
+    JSON.stringify(dados, null, 2),
     {
       status,
-
       headers: {
+        ...corsHeaders(),
         "Content-Type":
           "application/json; charset=utf-8",
-
-        "Cache-Control":
-          "no-store",
-
-        ...corsHeaders(),
-      },
+        "Cache-Control": "no-store"
+      }
     }
   );
+}
+
+function obterMensagemErro(error) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch (_) {
+    return "Erro interno desconhecido.";
+  }
 }
